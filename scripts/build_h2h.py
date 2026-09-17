@@ -129,7 +129,19 @@ def main():
     # 명단을 못 받았는데도 그냥 진행하면 eloboard 전체 선수(수천 명)로 파일을 만들어
     # 저장소에 수천 개 파일을 쏟아붓는다. 그럴 바엔 이번 실행을 멈추고 기존 파일을 남긴다.
     if not linked and not args.offline:
-        sys.exit('❌ 티어표 명단과 이어붙인 선수가 없습니다. 기존 파일을 그대로 두고 멈춥니다.')
+        # 왜 0명인지 바로 알 수 있게 양쪽 상태를 찍어준다.
+        sample = lambda names: ', '.join(list(names)[:8]) or '(없음)'
+        print('❌ 티어표 명단과 이어붙인 선수가 0명입니다. 기존 파일을 그대로 두고 멈춥니다.')
+        print(f'   · 시너지 명단: {len(tier_members)}명   예) {sample(m["nickname"] for m in tier_members)}')
+        print(f'   · eloboard 선수: {len(players)}명   예) {sample((v[0] if isinstance(v, list) else v) for v in players.values())}')
+        if not players:
+            print('   → 아카이브에 선수가 없습니다. scripts/sync_eloboard.py 가 제대로 받았는지 먼저 확인해주세요.')
+        elif not tier_members:
+            print('   → 시너지 명단을 받지 못했습니다(위 경고 참고). 네트워크나 주소를 확인해주세요.')
+        else:
+            print('   → 양쪽 다 있는데 이름이 하나도 안 맞습니다. docs/data/h2h_alias.json 에')
+            print('      {"시너지 닉네임": "eloboard 이름"} 형태로 몇 명 적어주면 이어집니다.')
+        sys.exit(1)
     target = set(linked) if linked else set(players)
     per = {pid: [] for pid in target}
     names_used = set()

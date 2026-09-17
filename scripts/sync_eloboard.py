@@ -66,9 +66,13 @@ PAGE_STEP = PAGE_LIMIT - 10
 START_OFFSET = 0
 
 DEFAULT_DELAY = 2.0          # robots.txt의 Crawl-delay
+# HTTP 헤더는 latin-1로만 보낼 수 있다 - 한글을 넣으면 요청을 만들 때
+# UnicodeEncodeError가 난다(실제로 한 번 겪었다). 그래서 영문으로만 적고,
+# 환경변수로 바꿔 넣더라도 ASCII가 아닌 글자는 떨어뜨린다.
 USER_AGENT = os.environ.get(
     'ELOBOARD_UA',
-    'staruniv-sync/1.0 (+https://ststats.github.io/staruniv; 캄몬스타즈 전적 집계용)')
+    'staruniv-sync/1.0 (+https://ststats.github.io/staruniv; team match archive)'
+).encode('ascii', 'ignore').decode('ascii')
 
 MAX_RETRY = 4
 
@@ -96,6 +100,11 @@ def fetch_page(offset, limit, delay):
                 raise SystemExit(
                     f'❌ HTTP {e.code} ({url})\n'
                     f'   403이면 robots.txt/User-Agent 차단일 수 있습니다. 운영자 허락을 먼저 받으세요.')
+        except UnicodeEncodeError as e:
+            # 헤더에 ASCII가 아닌 글자가 들어간 경우 - 재시도해도 똑같다(ValueError의 자식이라
+            # 아래 재시도 분기에 걸리지 않게 여기서 먼저 잡는다).
+            raise SystemExit(f'❌ 요청 헤더에 넣을 수 없는 글자가 있습니다: {e}\n'
+                             f'   ELOBOARD_UA 환경변수에 한글이 들어가지 않았는지 확인해주세요.')
         except (urllib.error.URLError, TimeoutError, ValueError) as e:
             last_err = e
         wait = max(delay, 1.0) * (2 ** attempt)
@@ -228,6 +237,9 @@ def main():
         except SystemExit as e:
             # 전체 수집은 한 시간이 넘는다. 도중에 연결이 끊겼다고 한 시간치를 버리지 않고,
             # 여기까지 받은 것을 저장한 뒤 끝낸다(끊긴 실행이므로 max_id는 올리지 않는다).
+            # 다만 첫 페이지부터 실패한 거라면 받은 게 하나도 없다 - 그건 조용히 넘기지 않는다.
+            if page == 0:
+                raise
             print(e)
             print('  ⚠️ 받다가 멈췄습니다 - 여기까지 받은 것만 저장합니다. 다시 실행하면 이어집니다.')
             break
@@ -286,6 +298,9 @@ def main():
         for rid in gone:
             del by_id[rid]
         deleted = len(gone)
+
+    if not by_id:
+        sys.exit('❌ 받은 경기가 하나도 없습니다. eloboard 응답을 확인해주세요(차단·주소 변경 등).')
 
     rows = sorted(by_id.values(), key=lambda r: -r[0])   # 최신 경기가 앞. 사이트가 그대로 쓰기 좋다
     added = len(rows) + deleted - before
