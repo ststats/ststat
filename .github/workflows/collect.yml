@@ -39,6 +39,18 @@ jobs:
     - name: 전적 전체 수집 (약 1시간)
       run: python scripts/sync_eloboard.py --full --delay ${{ inputs.delay }}
 
+    - name: 받은 내용 확인
+      run: |
+        python - <<'PY'
+        import json, sys
+        d = json.load(open('data/eloboard.json'))
+        rows, players = d.get('rows') or [], d.get('players') or {}
+        print(f"경기 {len(rows):,}건 · 선수 {len(players):,}명 · max_id {d.get('max_id')}")
+        print('선수 예시:', ', '.join([v[0] if isinstance(v, list) else str(v) for v in list(players.values())[:8]]) or '(없음)')
+        if not rows:
+            sys.exit('❌ 받은 경기가 없습니다 - eloboard 응답을 확인해주세요.')
+        PY
+
     - name: 상대전적 파일 만들기
       run: python scripts/build_h2h.py
 
