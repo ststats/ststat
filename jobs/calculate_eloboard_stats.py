@@ -3,11 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from models.sync_job import JobResult
-from processors.eloboard_derived import build_payload
+from processors.eloboard_derived import build_payload, history_cache_metadata
 from repositories.derived_stats import (
     activate_snapshot,
     cleanup_old_snapshots,
     create_snapshot,
+    load_active_history_cache,
     load_source_data,
     mark_failed,
     write_snapshot,
@@ -19,7 +20,9 @@ def run() -> JobResult:
     match_count = len(source['matches'])
     processor_dir = Path(__file__).resolve().parents[1] / 'processors'
 
-    payload = build_payload(source, processor_dir)
+    cache_metadata = history_cache_metadata(source)
+    history_cache = load_active_history_cache(cache_metadata)
+    payload = build_payload(source, processor_dir, history_cache=history_cache)
     as_of = payload['ranking_meta']['as_of']
     snapshot_id = create_snapshot(
         as_of,
@@ -28,6 +31,8 @@ def run() -> JobResult:
             'source': 'elo_matches',
             'ranking_algorithm': 'staruniv_part4_exact_adapter',
             'safe_swap': True,
+            'history_cache_reused': bool(history_cache),
+            **cache_metadata,
         },
     )
     try:
@@ -61,6 +66,7 @@ def run() -> JobResult:
             'ranked_players': counts['rankings'],
             'rating_history_rows': counts['history'],
             'safe_snapshot_swap': True,
+            'history_cache_reused': bool(history_cache),
             'cleanup_warning': cleanup_warning,
         },
     )

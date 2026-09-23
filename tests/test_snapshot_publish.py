@@ -8,7 +8,8 @@ def test_cleanup_failure_does_not_mark_active_snapshot_failed():
         "ranking_meta": {"as_of": "2026-09-23"},
     }
     with (
-        patch.object(calculate_eloboard_stats, "load_source_data", return_value={"matches": [{}]}),
+            patch.object(calculate_eloboard_stats, "load_source_data", return_value={"matches": [{}]}),
+            patch.object(calculate_eloboard_stats, "load_active_history_cache", return_value=None),
         patch.object(calculate_eloboard_stats, "build_payload", return_value=payload),
         patch.object(calculate_eloboard_stats, "create_snapshot", return_value="snapshot"),
         patch.object(calculate_eloboard_stats, "write_snapshot", return_value={

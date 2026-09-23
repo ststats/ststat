@@ -38,4 +38,4 @@ python scripts/run_job.py audit_match_rounds
 
 `migrations/001_*.sql`부터 번호 순서대로 같은 Supabase 프로젝트에 적용합니다. 웹 공개 뷰와 권한도 이 저장소의 migration에서만 관리합니다.
 
-현재 일별 통계 게시 코드는 `008_atomic_daily_publish.sql`의 RPC를 요구하며, StarUniv/Synergy 공개 조회는 `009_public_web_views.sql`을 요구합니다.
+현재 일별 통계 게시 코드는 `008_atomic_daily_publish.sql`의 RPC를 요구하며, StarUniv/Synergy 공개 조회는 `009_public_web_views.sql`, 어드민 통합 현황은 `010_admin_dashboard.sql`을 요구합니다.

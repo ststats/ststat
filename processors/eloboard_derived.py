@@ -2,11 +2,43 @@ from __future__ import annotations
 
 from collections import defaultdict
 import calendar
+import hashlib
 from pathlib import Path
 import json
 import subprocess
 import sys
 import tempfile
+
+
+RANKING_HISTORY_CACHE_VERSION = 'ranking-2026-09-23-v2'
+
+
+def history_cache_metadata(source: dict) -> dict:
+    """닫힌 월 결과에 영향을 주는 입력만 안정적으로 지문 처리한다."""
+    match_dates = [str(r.get('match_date') or '')[:10] for r in source['matches']]
+    as_of = max((d for d in match_dates if d), default='')
+    current_month = as_of[:7]
+    digest = hashlib.sha256()
+    for row in source['matches']:
+        day = str(row.get('match_date') or '')[:10]
+        if not day or day[:7] == current_month:
+            continue
+        fields = (
+            row.get('elo_match_id'), day, row.get('winner_elo_id'), row.get('loser_elo_id'),
+            row.get('map_id'), row.get('category_id'),
+        )
+        digest.update(('|'.join('' if v is None else str(v) for v in fields) + '\n').encode())
+    for row in source.get('tier_members', []):
+        fields = [row.get('elo_id'), row.get('tier')]
+        fields.extend(row.get(f'promoted_tier_{n}') for n in range(9))
+        digest.update(('|'.join('' if v is None else str(v) for v in fields) + '\n').encode())
+    for row in source.get('categories', []):
+        digest.update(f"{row.get('category_id')}|{row.get('name') or ''}\n".encode())
+    return {
+        'history_cache_version': RANKING_HISTORY_CACHE_VERSION,
+        'closed_history_fingerprint': digest.hexdigest(),
+        'history_current_month': current_month,
+    }
 
 
 def _write_json(path: Path, data):
@@ -56,7 +88,8 @@ def make_legacy_store(source: dict) -> dict:
     }
 
 
-def run_staruniv_algorithm(source: dict, processor_dir: Path) -> tuple[dict, dict]:
+def run_staruniv_algorithm(source: dict, processor_dir: Path,
+                           history_cache: dict | None = None) -> tuple[dict, dict]:
     """Run the exact current StarUniv H2H/ranking implementation in an isolated temp tree.
 
     The JSON files are temporary adapter artifacts only; Supabase remains the persisted output.
@@ -68,16 +101,23 @@ def run_staruniv_algorithm(source: dict, processor_dir: Path) -> tuple[dict, dic
         _write_json(root / 'data/eloboard.json', store)
         _write_json(root / 'data/db.json', {'tierMembers': [_tier_member_legacy(r) for r in source['tier_members']]})
         _write_json(root / 'data/h2h_alias.json', {})
+        if history_cache:
+            _write_json(root / 'docs/data/h2h/rating.json', history_cache)
 
         subprocess.run(
             [sys.executable, str(processor_dir / 'staruniv_h2h.py'), '--src', str(root / 'data/eloboard.json')],
             cwd=root, check=True,
         )
+        ranking_cmd = [
+            sys.executable, str(processor_dir / 'staruniv_ranking.py'),
+            '--src', str(root / 'data/eloboard.json'),
+            '--index', str(root / 'docs/data/h2h/index.json'),
+            '--db', str(root / 'data/db.json'),
+        ]
+        if history_cache:
+            ranking_cmd.append('--reuse-closed-history')
         subprocess.run(
-            [sys.executable, str(processor_dir / 'staruniv_ranking.py'),
-             '--src', str(root / 'data/eloboard.json'),
-             '--index', str(root / 'docs/data/h2h/index.json'),
-             '--db', str(root / 'data/db.json')],
+            ranking_cmd,
             cwd=root, check=True,
         )
         index = json.loads((root / 'docs/data/h2h/index.json').read_text(encoding='utf-8'))
@@ -183,11 +223,12 @@ def history_rows(rating: dict) -> list[dict]:
     return out
 
 
-def build_payload(source: dict, processor_dir: Path) -> dict:
+def build_payload(source: dict, processor_dir: Path,
+                  history_cache: dict | None = None) -> dict:
     if not source['matches'] or not source['players']:
         raise RuntimeError('EloBoard source tables are empty; refusing to calculate derived snapshot')
     player_stats, h2h, race_stats = aggregate_source(source)
-    index, rating = run_staruniv_algorithm(source, processor_dir)
+    index, rating = run_staruniv_algorithm(source, processor_dir, history_cache)
     rankings, ranking_meta = rankings_from_index(index)
     history = history_rows(rating)
     payload = {

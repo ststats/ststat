@@ -411,8 +411,8 @@ def solve_two_stage(wi, li, ww, ww_tier, tier_idx, lam, n, n_tiers, wsum, wsum_t
     keep = ~(thin[wi] | thin[li])
     delta = fit_delta(wi[keep], li[keep], ww[keep], tier_idx, lam, n, m)
     theta = m[tier_idx] + delta
-    score = ranking_scores(theta, wi[keep], li[keep], ww[keep], lam)
-    return theta, score, keep, m
+    score, standard_error = ranking_scores(theta, wi[keep], li[keep], ww[keep], lam)
+    return theta, score, standard_error, keep, m
 
 
 def ranking_scores(theta, wi, li, ww, lam):
@@ -423,7 +423,45 @@ def ranking_scores(theta, wi, li, ww, lam):
     prec = lam.copy()
     np.add.at(prec, wi, info)
     np.add.at(prec, li, info)
-    return theta - SE_PENALTY / np.sqrt(prec)
+    standard_error = 1.0 / np.sqrt(prec)
+    return theta - SE_PENALTY * standard_error, standard_error
+
+
+def monotone_tier_levels(values, weights=None):
+    """티어 기준선을 강한 티어부터 단조 감소하도록 보정한다."""
+    vals = [float(v) for v in values]
+    raw_weights = [1.0] * len(vals) if weights is None else weights
+    ws = [max(float(w), 1.0) for w in raw_weights]
+    blocks = []
+    for idx, (value, weight) in enumerate(zip(vals, ws)):
+        blocks.append([idx, idx, value, weight])
+        while len(blocks) >= 2 and blocks[-2][2] < blocks[-1][2]:
+            right = blocks.pop()
+            left = blocks.pop()
+            total = left[3] + right[3]
+            mean = (left[2] * left[3] + right[2] * right[3]) / total
+            blocks.append([left[0], right[1], mean, total])
+    out = [0.0] * len(vals)
+    for start, end, mean, _weight in blocks:
+        for idx in range(start, end + 1):
+            out[idx] = mean
+    return np.asarray(out, dtype=np.float64)
+
+
+def infer_data_tier(current_index, theta, standard_error, levels, max_steps=2):
+    """불확실성 구간이 인접 티어 경계를 완전히 넘을 때만 괴리로 판정한다."""
+    idx = int(current_index)
+    lower = float(theta) - SE_PENALTY * float(standard_error)
+    upper = float(theta) + SE_PENALTY * float(standard_error)
+    for _ in range(max_steps):
+        if idx > 0 and lower > (levels[idx - 1] + levels[idx]) / 2.0:
+            idx -= 1
+            continue
+        if idx + 1 < len(levels) and upper < (levels[idx] + levels[idx + 1]) / 2.0:
+            idx += 1
+            continue
+        break
+    return idx
 
 
 def solve_at(rows, cats, as_of, players, t_pos, n_tiers, ladders):
@@ -440,7 +478,7 @@ def solve_at(rows, cats, as_of, players, t_pos, n_tiers, ladders):
     tier_idx = np.fromiter((t_pos[t] for t in tiers_then), dtype=np.int64, count=n)
     unranked = tier_idx == t_pos[UNRANKED]
     lam = np.where(unranked, 1.0 / SIGMA_UNRANKED ** 2, 1.0 / SIGMA_DELTA ** 2)
-    _theta, score, _keep, _m = solve_two_stage(
+    _theta, score, _se, _keep, _m = solve_two_stage(
         wi, li, ww, ww_tier, tier_idx, lam, n, n_tiers, wsum, wsum_tier)
 
     cutoff = (as_of - dt.timedelta(days=RECENT_DAYS)).isoformat()
@@ -467,29 +505,52 @@ def month_ends(last_day, count):
     return list(reversed(out))
 
 
-def build_history(rows, cats, players, t_pos, n_tiers, last_day, ladders):
+def build_history(rows, cats, players, t_pos, n_tiers, last_day, ladders,
+                  cached_payload=None, current_scores=None):
     """달마다 그 시점까지의 경기로 다시 맞춰 '그때의 점수'를 모은다.
 
-    한 번 맞추는 데 1초 남짓이라 18개월이면 40초쯤 걸린다. 매일 도는 빌드에서
-    이 정도면 감당할 만하고, 대신 지나간 달의 값이 매번 똑같이 재현된다.
+    입력 지문이 같은 마감 월은 이전 활성 스냅샷을 재사용하고, 현재 월은 이미
+    계산한 현재 랭킹을 공유한다. 캐시가 무효면 마감 월만 전체 재계산한다.
     """
     dated = sorted(rows, key=lambda r: str(r[1])[:10])
     days = [str(r[1])[:10] for r in dated]
     months = month_ends(last_day, HISTORY_MONTHS)
     series = {}
     keys = []
+    cached_months = list((cached_payload or {}).get('months') or [])
+    cached_players = (cached_payload or {}).get('players') or {}
+    cached_by_player = {
+        str(pid): dict(zip(cached_months, values or []))
+        for pid, values in cached_players.items()
+    }
+    current_key = last_day.strftime('%Y-%m')
+    reused = recalculated = 0
     for i, end in enumerate(months):
+        key = end.strftime('%Y-%m')
+        keys.append(key)
+        if key == current_key and current_scores is not None:
+            for pid, value in current_scores.items():
+                series.setdefault(pid, {})[key] = value
+            reused += 1
+            continue
+        # 닫힌 달은 입력 해시가 같을 때만 이전 활성 스냅샷의 결과를 쓴다.
+        if key != current_key and key in cached_months:
+            for pid, values in cached_by_player.items():
+                value = values.get(key)
+                if value is not None:
+                    series.setdefault(pid, {})[key] = value
+            reused += 1
+            continue
         cut = bisect.bisect_right(days, end.isoformat())
         if cut < 100:
             continue
         scores = solve_at(dated[:cut], cats, end, players, t_pos, n_tiers, ladders)
-        keys.append(end.strftime('%Y-%m'))
         for pid, sc in scores.items():
-            series.setdefault(pid, {})[end.strftime('%Y-%m')] = sc
+            series.setdefault(pid, {})[key] = sc
+        recalculated += 1
     # 달마다 값이 없을 수 있으므로(그 달에 쉬었으면) 자리를 null로 채워 길이를 맞춘다
     out = {pid: [vals.get(k) for k in keys] for pid, vals in series.items()}
-    # 값이 하나뿐이면 선을 그릴 수 없다 - 파일만 키우므로 뺀다
-    out = {pid: v for pid, v in out.items() if sum(x is not None for x in v) >= 2}
+    print(f'   월별 이력: 캐시 재사용 {reused}개월 · 재계산 {recalculated}개월')
     return keys, out
 
 
@@ -539,6 +600,8 @@ def main():
     ap.add_argument('--top', type=int, default=0, help='티어별 상위 N명을 찍어본다')
     ap.add_argument('--no-history', action='store_true',
                     help='레이팅 변화(월별 스냅샷) 계산을 건너뛴다')
+    ap.add_argument('--reuse-closed-history', action='store_true',
+                    help='기존 rating.json의 마감 월 결과를 재사용한다')
     args = ap.parse_args()
 
     if not os.path.exists(args.src) or not os.path.exists(args.index):
@@ -573,7 +636,7 @@ def main():
 
     # 1단 티어 간격(긴 창) -> 2단 개인 폼(짧은 창). 표준오차는 짧은 창 기준이다 -
     # '지금 이 선수를 얼마나 아는가'를 재는 값이라 폼과 같은 창이어야 한다.
-    theta, score, keep, m = solve_two_stage(
+    theta, score, standard_error, keep, m = solve_two_stage(
         wi, li, ww, ww_tier, tier_idx, lam, n, len(tiers), wsum, wsum_tier)
     dropped_pairs = int((~keep).sum())
     wi, li, ww = wi[keep], li[keep], ww[keep]
@@ -581,6 +644,13 @@ def main():
     # 최근 RECENT_DAYS 안에 실제로 몇 판 뒀는지(가중치 없는 날것). 눈에 보이는 문턱이라
     # 가중치가 아니라 판 수 그대로 센다.
     cutoff_day = (today - dt.timedelta(days=RECENT_DAYS)).isoformat()
+    history_current_scores = {
+        pid: round(float(score[k]) * SCORE_SCALE + SCORE_BASE, 1)
+        for k, pid in enumerate(order)
+        if players.get(pid) is not None
+        and tier_of(players.get(pid)) != UNRANKED
+        and last_day.get(k, '') >= cutoff_day
+    }
     recent_games = {}
     for r in rows:
         if len(r) < 6 or str(r[1])[:10] < cutoff_day:
@@ -660,12 +730,16 @@ def main():
 
     # 사람이 매긴 실제 티어와 전적 데이터가 가리키는 적합 티어의 차이를 저장한다.
     # 어드민 '티어 괴리' 표시는 이 값을 사용하고, 실제 순위는 기존처럼 현재 티어 안에서만 매긴다.
-    levels = np.array([m[t_pos[t]] for t in TIER_ORDER])
+    raw_levels = np.array([m[t_pos[t]] for t in TIER_ORDER])
+    level_weights = [max(tier_sizes.get(t, 0), 1) for t in TIER_ORDER]
+    levels = monotone_tier_levels(raw_levels, level_weights)
     pos = {pid: k for k, pid in enumerate(order)}
     for t, lst in ranked.items():
         for _score, pid in lst:
             k = pos[pid]
-            fit_t = TIER_ORDER[int(np.argmin(np.abs(levels - theta[k])))]
+            current_idx = TIER_ORDER.index(t)
+            fit_idx = infer_data_tier(current_idx, theta[k], standard_error[k], levels)
+            fit_t = TIER_ORDER[fit_idx]
             gap = TIER_ORDER.index(t) - TIER_ORDER.index(fit_t)
             players[pid]['dataTier'] = fit_t
             players[pid]['tierGap'] = int(gap)
@@ -702,13 +776,10 @@ def main():
     # 갓·킹은 '지금 실력 상위 N명'이 아니라 '대회에 올라간 명단'이라 어긋남이 많다
     # (실측: 킹 51.9% · 갓 37.5% vs 잭 3.4% · 1티어 0%). 순위는 사람이 매긴 티어
     # 안에서 그대로 매기고, 이 목록은 티어표를 갱신할 때 참고하라고 로그로만 남긴다.
-    levels = np.array([m[t_pos[t]] for t in TIER_ORDER])
-    pos = {pid: k for k, pid in enumerate(order)}
     off = []
     for t, lst in ranked.items():
         for _s, pid in lst:
-            k = pos[pid]
-            fit_t = TIER_ORDER[int(np.argmin(np.abs(levels - theta[k])))]
+            fit_t = players[pid].get('dataTier', t)
             if fit_t != t:
                 off.append((TIER_ORDER.index(t) - TIER_ORDER.index(fit_t),
                             players[pid].get('n', pid), t, fit_t))
@@ -739,7 +810,15 @@ def main():
 
     if not args.no_history:
         ladders = load_ladders(args.db, players)
-        months, series = build_history(rows, cats, players, t_pos, len(tiers), today, ladders)
+        cached_payload = None
+        if args.reuse_closed_history and os.path.exists(HISTORY_PATH):
+            try:
+                cached_payload = load_json(HISTORY_PATH)
+            except (OSError, ValueError, TypeError) as exc:
+                print(f'   ⚠️ 월별 이력 캐시를 읽지 못해 전체 재계산합니다: {exc}')
+        months, series = build_history(
+            rows, cats, players, t_pos, len(tiers), today, ladders,
+            cached_payload, history_current_scores)
         payload = {'asOf': today.isoformat(), 'months': months, 'players': series}
         tmp = HISTORY_PATH + '.tmp'
         with io.open(tmp, 'w', encoding='utf-8') as f:

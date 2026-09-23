@@ -39,6 +39,41 @@ def load_source_data():
     }
 
 
+def load_active_history_cache(expected_metadata: dict) -> dict | None:
+    """입력 지문과 계산 버전이 같은 활성 스냅샷의 월별 이력을 복원한다."""
+    db = get_supabase()
+    active = db.table('elo_derived_snapshots').select('snapshot_id,metadata').eq(
+        'status', 'active').limit(1).execute().data or []
+    if not active:
+        return None
+    row = active[0]
+    metadata = row.get('metadata') or {}
+    required = ('history_cache_version', 'closed_history_fingerprint')
+    if any(metadata.get(key) != expected_metadata.get(key) for key in required):
+        return None
+
+    snapshot_id = row['snapshot_id']
+    history = []
+    start = 0
+    while True:
+        batch = db.table('elo_rating_history').select('elo_id,month_end,rating').eq(
+            'snapshot_id', snapshot_id).order('month_end').order('elo_id').range(
+                start, start + PAGE - 1).execute().data or []
+        history.extend(batch)
+        if len(batch) < PAGE:
+            break
+        start += PAGE
+    months = sorted({str(r['month_end'])[:7] for r in history})
+    by_player = {}
+    for item in history:
+        pid = str(item['elo_id'])
+        by_player.setdefault(pid, {})[str(item['month_end'])[:7]] = float(item['rating'])
+    return {
+        'months': months,
+        'players': {pid: [values.get(month) for month in months] for pid, values in by_player.items()},
+    }
+
+
 def create_snapshot(as_of: str, source_match_count: int, metadata: dict) -> str:
     sid = str(uuid.uuid4())
     get_supabase().table('elo_derived_snapshots').insert({
