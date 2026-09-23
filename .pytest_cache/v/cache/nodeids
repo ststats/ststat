@@ -1,0 +1,3 @@
+[
+  "tests/test_config.py::test_ownership_rules_exist"
+]
