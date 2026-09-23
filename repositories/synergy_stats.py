@@ -16,22 +16,12 @@ def load_roster_for_synergy() -> list[SynergyRosterMember]:
     explicitly or larger rosters are silently truncated.
     """
     db = get_supabase()
-<<<<<<< HEAD
-
-    rows = []
-    page_size = 1000
-    start = 0
-
-    while True:
-        batch = (
-=======
     page_size = 1000
     start = 0
     rows: list[dict] = []
 
     while True:
         response = (
->>>>>>> 8f49063 (Fix Synergy roster pagination and archive merge)
             db.table("tier_members")
             .select(
                 "soop_id,elo_id,nickname,role,affiliation,"
@@ -40,21 +30,6 @@ def load_roster_for_synergy() -> list[SynergyRosterMember]:
             .order("source_order")
             .range(start, start + page_size - 1)
             .execute()
-<<<<<<< HEAD
-            .data
-            or []
-        )
-
-        rows.extend(batch)
-
-        if len(batch) < page_size:
-            break
-
-        start += page_size
-
-    out = []
-
-=======
         )
         batch = response.data or []
         rows.extend(batch)
@@ -63,16 +38,13 @@ def load_roster_for_synergy() -> list[SynergyRosterMember]:
         start += page_size
 
     out: list[SynergyRosterMember] = []
->>>>>>> 8f49063 (Fix Synergy roster pagination and archive merge)
     for row in rows:
         soop_id = str(row.get("soop_id") or "").strip()
         nickname = str(row.get("nickname") or "").strip()
-
         if not soop_id or not nickname:
             continue
 
         elo_id = row.get("elo_id")
-
         try:
             elo_id = int(elo_id) if elo_id is not None else None
         except (TypeError, ValueError):
@@ -87,18 +59,9 @@ def load_roster_for_synergy() -> list[SynergyRosterMember]:
                 affiliation=(str(row.get("affiliation") or "").strip() or None),
                 race=(str(row.get("race") or "").strip() or None),
                 tier=(str(row.get("tier") or "").strip() or None),
-<<<<<<< HEAD
-                modified_at=(
-                    str(row.get("modified_at") or "").strip() or None
-                ),
-            )
-        )
-
-=======
                 modified_at=(str(row.get("modified_at") or "").strip() or None),
             )
         )
->>>>>>> 8f49063 (Fix Synergy roster pagination and archive merge)
     return out
 
 

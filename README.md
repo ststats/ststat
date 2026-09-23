@@ -93,12 +93,3 @@ We will add actual batch jobs in later parts.
 ## Next: Part 2
 
 Part 2 will centralize roster / `tier_members` handling and new-player candidate detection without moving EloBoard statistics yet.
-<<<<<<< HEAD
-=======
-
-
-## GitHub Actions import 경로
-
-`python scripts/run_job.py healthcheck` 실행 시 프로젝트 루트를 Python import 경로에 자동 추가합니다.
-그래서 GitHub Actions에서도 `repositories`, `jobs`, `models` 모듈을 정상적으로 불러옵니다.
->>>>>>> 733d267 (Initial ststat pipeline setup)
