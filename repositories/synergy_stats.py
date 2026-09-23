@@ -11,35 +11,63 @@ PAGE_SIZE = 1000
 
 def load_roster_for_synergy() -> list[SynergyRosterMember]:
     db = get_supabase()
-    rows = (
-        db.table("tier_members")
-        .select("soop_id,elo_id,nickname,role,affiliation,race,tier,modified_at,source_order")
-        .order("source_order")
-        .execute()
-        .data
-        or []
-    )
-    out: list[SynergyRosterMember] = []
+
+    rows = []
+    page_size = 1000
+    start = 0
+
+    while True:
+        batch = (
+            db.table("tier_members")
+            .select(
+                "soop_id,elo_id,nickname,role,affiliation,"
+                "race,tier,modified_at,source_order"
+            )
+            .order("source_order")
+            .range(start, start + page_size - 1)
+            .execute()
+            .data
+            or []
+        )
+
+        rows.extend(batch)
+
+        if len(batch) < page_size:
+            break
+
+        start += page_size
+
+    out = []
+
     for row in rows:
         soop_id = str(row.get("soop_id") or "").strip()
         nickname = str(row.get("nickname") or "").strip()
+
         if not soop_id or not nickname:
             continue
+
         elo_id = row.get("elo_id")
+
         try:
             elo_id = int(elo_id) if elo_id is not None else None
         except (TypeError, ValueError):
             elo_id = None
-        out.append(SynergyRosterMember(
-            soop_id=soop_id,
-            elo_id=elo_id,
-            nickname=nickname,
-            role=str(row.get("role") or ""),
-            affiliation=(str(row.get("affiliation") or "").strip() or None),
-            race=(str(row.get("race") or "").strip() or None),
-            tier=(str(row.get("tier") or "").strip() or None),
-            modified_at=(str(row.get("modified_at") or "").strip() or None),
-        ))
+
+        out.append(
+            SynergyRosterMember(
+                soop_id=soop_id,
+                elo_id=elo_id,
+                nickname=nickname,
+                role=str(row.get("role") or ""),
+                affiliation=(str(row.get("affiliation") or "").strip() or None),
+                race=(str(row.get("race") or "").strip() or None),
+                tier=(str(row.get("tier") or "").strip() or None),
+                modified_at=(
+                    str(row.get("modified_at") or "").strip() or None
+                ),
+            )
+        )
+
     return out
 
 
