@@ -5,7 +5,14 @@ import numpy as np
 
 from processors.eloboard_derived import history_cache_metadata
 from processors import staruniv_ranking
-from processors.staruniv_ranking import infer_data_tier, monotone_tier_levels
+from processors.staruniv_ranking import (
+    TIER_ORDER,
+    UNRANKED,
+    build_pairs,
+    fit,
+    infer_data_tier,
+    monotone_tier_levels,
+)
 
 
 def _source(current_winner=1, closed_winner=1):
@@ -55,6 +62,36 @@ def test_data_tier_requires_confident_boundary_crossing_and_caps_jump():
     assert infer_data_tier(2, theta=2.8, standard_error=0.1, levels=levels) == 0
     assert infer_data_tier(2, theta=2.8, standard_error=1.0, levels=levels) == 2
     assert infer_data_tier(0, theta=-2.0, standard_error=0.1, levels=levels) == 2
+
+
+def test_fit_enforces_tier_order_even_when_results_push_toward_inversion():
+    # 약한 티어(1)가 강한 티어(0)를 계속 이기는 극단적 입력에서도 기준선은 역전되지 않는다.
+    wi = np.asarray([1], dtype=np.int64)
+    li = np.asarray([0], dtype=np.int64)
+    ww = np.asarray([100.0])
+    win_tier = np.asarray([1], dtype=np.int64)
+    lose_tier = np.asarray([0], dtype=np.int64)
+    lam = np.asarray([100.0, 100.0])
+    levels, _delta = fit(
+        wi, li, ww, win_tier, lose_tier, lam, 2, len(TIER_ORDER) + 1)
+
+    assert np.all(levels[:len(TIER_ORDER) - 1] >= levels[1:len(TIER_ORDER)])
+
+
+def test_build_pairs_uses_tier_at_match_date_for_promoted_player():
+    players = {'1': {'t': '1'}, '2': {'t': '1'}}
+    ladders = {'1': [('2026-01-01', '2'), ('2026-07-01', '1')]}
+    tiers = TIER_ORDER + [UNRANKED]
+    t_pos = {tier: idx for idx, tier in enumerate(tiers)}
+    rows = [
+        [1, '2026-06-01', 1, 2, 0, 0],
+        [2, '2026-08-01', 1, 2, 0, 0],
+    ]
+    result = build_pairs(rows, ['solo_event'], dt.date(2026, 8, 1), players, ladders, t_pos)
+    win_tiers, lose_tiers = result[4], result[5]
+
+    assert set(win_tiers.tolist()) == {t_pos['2'], t_pos['1']}
+    assert set(lose_tiers.tolist()) == {t_pos['1']}
 
 
 def test_closed_history_reuses_cache_and_only_solves_current_month(monkeypatch):

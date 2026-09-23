@@ -30,6 +30,7 @@ def test_rankings_from_index():
             'asOf': '2026-09-23', 'halfLifeDays': 90, 'halfLifeTierDays': 540,
             'recentDays': 365, 'minRecentGames': 10,
             'tierCounts': {'킹': 1}, 'tierLevels': {'킹': 2100.0},
+            'backtest': {'status': 'ok', 'recommendedProfile': 'production'},
         },
         'players': {
             '10': {
@@ -44,3 +45,4 @@ def test_rankings_from_index():
     assert rows[0]['tier_rank'] == 1
     assert rows[0]['recent_90_wins'] == 6
     assert meta['half_life_tier_days'] == 540
+    assert meta['backtest']['recommendedProfile'] == 'production'

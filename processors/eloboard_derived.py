@@ -10,7 +10,7 @@ import sys
 import tempfile
 
 
-RANKING_HISTORY_CACHE_VERSION = 'ranking-2026-09-23-v2'
+RANKING_HISTORY_CACHE_VERSION = 'ranking-2026-09-23-v3'
 
 
 def history_cache_metadata(source: dict) -> dict:
@@ -207,6 +207,7 @@ def rankings_from_index(index: dict) -> tuple[list[dict], dict]:
         'min_recent_games': int(meta.get('minRecentGames') or 0),
         'tier_counts': tier_counts,
         'tier_levels': meta.get('tierLevels') or {},
+        'backtest': meta.get('backtest') or {},
     }
 
 

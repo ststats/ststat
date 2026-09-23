@@ -29,9 +29,10 @@ def run() -> JobResult:
         match_count,
         {
             'source': 'elo_matches',
-            'ranking_algorithm': 'staruniv_part4_exact_adapter',
+            'ranking_algorithm': 'staruniv_monotone_promotion_v3',
             'safe_swap': True,
             'history_cache_reused': bool(history_cache),
+            'ranking_backtest': payload['ranking_meta'].get('backtest') or {},
             **cache_metadata,
         },
     )
@@ -67,6 +68,7 @@ def run() -> JobResult:
             'rating_history_rows': counts['history'],
             'safe_snapshot_swap': True,
             'history_cache_reused': bool(history_cache),
+            'ranking_backtest_status': (payload['ranking_meta'].get('backtest') or {}).get('status'),
             'cleanup_warning': cleanup_warning,
         },
     )
