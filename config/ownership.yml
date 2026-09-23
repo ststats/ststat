@@ -2,7 +2,6 @@ realtime:
   owner: ststat
   executor: cloudflare_worker
   cadence: "2 minutes"
-  description: "Realtime broadcast state belongs to the ststat data domain; the existing Cloudflare Worker remains its realtime executor."
   owns:
     - live broadcast status
     - realtime viewer count
@@ -17,7 +16,6 @@ roster:
   existing_tier_members_auto_columns:
     - name
   candidate_table: tier_member_candidates
-  candidate_behavior: "New API players are staged for review and are never auto-inserted into tier_members."
   protected_manual_columns:
     - nickname
     - soop_id
@@ -31,36 +29,24 @@ roster:
     - modified_at
     - history
     - started_on
-    - elo_registered
-    - tier_table_registered
-    - promoted_tier_8
-    - promoted_tier_7
-    - promoted_tier_6
-    - promoted_tier_5
-    - promoted_tier_4
-    - promoted_tier_3
-    - promoted_tier_2
-    - promoted_tier_1
-    - promoted_tier_0
   notes:
-    - "modified_at is preserved in Part 2. It will be consumed/cleared only after historical backfill is moved to ststat in a later part."
-    - "elo_id remains admin-controlled in Part 2 to preserve current behavior."
+    - "modified_at remains preserved until historical backfill moves to ststat."
 
-batch:
+eloboard:
   owner: ststat
   executor: external_cron_to_github_actions
   cadence: "4 hours"
-  owns:
-    - roster source-name sync
-    - roster candidate discovery
-    - eloboard source data (future part)
-    - poonggo source data (future part)
-    - automatic youtube collection (future part)
-    - h2h stats (future part)
-    - rankings (future part)
-    - race stats (future part)
-    - daily stats (future part)
-    - historical backfill (future part)
+  source: "https://eloboard.co.kr/api/matches"
+  owns_tables:
+    - elo_categories
+    - elo_maps
+    - elo_players
+    - elo_matches
+  behavior:
+    - "Incremental collection starts from the newest DB match id and re-reads a 3-day overlap window."
+    - "Partial/failed fetches never write matches or delete existing rows."
+    - "Unknown elo_ids are staged in tier_member_candidates and never auto-added to tier_members."
+    - "H2H/ranking/race calculations remain out of scope until Part 4."
 
 staruniv_admin:
   owner: staruniv_admin
@@ -77,5 +63,5 @@ rules:
   - "Batch jobs must never overwrite realtime broadcast fields."
   - "Realtime worker must never overwrite batch-derived statistics."
   - "Roster sync may update only explicitly auto-owned tier_members columns."
-  - "New players must go to tier_member_candidates for human review."
-  - "modified_at must not be cleared until historical backfill owns that lifecycle."
+  - "EloBoard sync may write only elo_* source tables and candidate staging."
+  - "New players must never be auto-inserted into tier_members."
