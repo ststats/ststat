@@ -13,6 +13,8 @@ class SynergyRosterMember:
     race: str | None
     tier: str | None
     modified_at: str | None
+    gender: str | None = None
+    birth_date: str | None = None
 
 
 @dataclass(frozen=True)

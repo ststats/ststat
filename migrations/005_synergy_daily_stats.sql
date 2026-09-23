@@ -23,6 +23,8 @@ create table if not exists public.daily_member_stats (
   affiliation text,
   race text,
   tier text,
+  gender text,
+  birth_date date,
   balloons bigint not null default 0,
   broadcast_seconds bigint not null default 0,
   cumulative_viewers bigint not null default 0,

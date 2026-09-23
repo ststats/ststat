@@ -14,14 +14,23 @@ AUTO_OWNED_EXISTING_COLUMNS = {"name"}
 
 def load_roster() -> dict[str, ExistingRosterMember]:
     db = get_supabase()
-    rows = (
-        db.table("tier_members")
-        .select("soop_id,name,elo_id,modified_at")
-        .order("source_order")
-        .execute()
-        .data
-        or []
-    )
+    rows = []
+    start = 0
+    while True:
+        batch = (
+            db.table("tier_members")
+            .select("id,soop_id,name,elo_id,modified_at")
+            .order("source_order")
+            .order("id")
+            .range(start, start + 999)
+            .execute()
+            .data
+            or []
+        )
+        rows.extend(batch)
+        if len(batch) < 1000:
+            break
+        start += 1000
 
     out: dict[str, ExistingRosterMember] = {}
     for row in rows:
@@ -39,7 +48,22 @@ def load_roster() -> dict[str, ExistingRosterMember]:
 
 def load_pending_ids() -> set[str]:
     db = get_supabase()
-    rows = db.table("tier_member_candidates").select("id").execute().data or []
+    rows = []
+    start = 0
+    while True:
+        batch = (
+            db.table("tier_member_candidates")
+            .select("id")
+            .order("id")
+            .range(start, start + 999)
+            .execute()
+            .data
+            or []
+        )
+        rows.extend(batch)
+        if len(batch) < 1000:
+            break
+        start += 1000
     return {
         str(row.get("id") or "").strip().lower()
         for row in rows

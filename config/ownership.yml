@@ -30,7 +30,7 @@ roster:
     - history
     - started_on
   notes:
-    - "modified_at remains preserved until historical backfill moves to ststat."
+    - "modified_at is cleared conditionally only when the exact backfill marker still matches."
 
 eloboard:
   owner: ststat

@@ -55,7 +55,7 @@ def mark_failed(snapshot_id: str, error: str):
     get_supabase().table('elo_derived_snapshots').update({
         'status': 'failed',
         'metadata': {'error': error[:3000]},
-    }).eq('snapshot_id', snapshot_id).execute()
+    }).eq('snapshot_id', snapshot_id).eq('status', 'building').execute()
 
 
 def _insert(table: str, rows: list[dict], snapshot_id: str, chunk: int = 500):

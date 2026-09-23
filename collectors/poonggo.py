@@ -57,7 +57,8 @@ def fetch_monthly(year: int, month: int, soop_ids: list[str]) -> dict[str, Month
         return {}
 
     result: dict[str, MonthlyLiveStats] = {}
-    chunks = list(_chunks([str(x) for x in soop_ids], IDS_PER_REQUEST))
+    canonical_ids = {str(value).lower(): str(value) for value in soop_ids}
+    chunks = list(_chunks(list(canonical_ids.values()), IDS_PER_REQUEST))
     date_str = f"{year:04d}-{month:02d}-01"
 
     for idx, chunk in enumerate(chunks):
@@ -75,6 +76,7 @@ def fetch_monthly(year: int, month: int, soop_ids: list[str]) -> dict[str, Month
             soop_id = str(entry.get("id") or "").strip()
             if not soop_id:
                 continue
+            soop_id = canonical_ids.get(soop_id.lower(), soop_id)
             result[soop_id] = MonthlyLiveStats(
                 balloons=_to_int(entry.get("amt")),
                 broadcast_seconds=_to_int(entry.get("broadTime")),

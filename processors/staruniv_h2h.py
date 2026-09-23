@@ -33,8 +33,7 @@
 [대회 이름] eloboard는 형식을 영문 코드로 준다(sponsored, college_war ...). 화면에 그대로 쓰면
 읽기 어려워서 아래 CAT_LABELS로 우리말 이름을 붙인다. 목록에 없는 코드는 원문 그대로 둔다.
 
-    python scripts/build_h2h.py            # 시너지 명단을 받아서 만든다
-    python scripts/build_h2h.py --offline  # 명단을 못 받으면 이름/종족만으로 만든다(로컬 테스트)
+이 파일은 ststat의 호환 계산 어댑터이며 직접 실행하지 않는다.
 """
 
 import argparse
@@ -45,13 +44,10 @@ import os
 import re
 import shutil
 import sys
-import urllib.request
 
 SRC_PATH = os.path.join('data', 'eloboard.json')
 OUT_DIR = os.path.join('docs', 'data', 'h2h')
 ALIAS_PATH = os.path.join('data', 'h2h_alias.json')
-SYNERGY_BASE = 'https://ststats.github.io/synergy'
-HIDDEN_TEAMS = {'휴면'}          # page-tier.js의 TIER_HIDDEN_TEAMS와 같은 기준
 
 # 샤드 하나가 넘지 않으려는 목표 용량(바이트). 개별 파일 시절 가장 큰 선수 파일이
 # ~270KB였으므로, 그보다 조금 넉넉하게 잡아서 "샤드로 묶었더니 오히려 더 커졌다"는
@@ -127,18 +123,13 @@ def load_json(path, default=None):
         sys.exit(f'❌ {path} 이 깨졌습니다: {e}')
 
 
-def http_json(url):
-    with urllib.request.urlopen(url, timeout=30) as res:
-        return json.loads(res.read().decode('utf-8'))
-
-
 DB_PATH = os.path.join('data', 'db.json')
 
 
 def db_tier_members():
     """Supabase에서 export된 db.json의 tierMembers 명단을 읽는다.
     시너지 명단과 달리 휴면·FA까지 다 들어 있어서, 상대전적에서 찾을 수 있는 선수가 훨씬 많다.
-    돌려주는 모양은 fetch_tier_members()와 같다."""
+    브라우저가 사용하던 티어 명단 형태로 변환한다."""
     db = load_json(DB_PATH, {})
     out = []
     # 0 같은 값도 빈 값으로 취급하지 않도록 None만 빈 문자열로 바꾼다.
@@ -162,33 +153,6 @@ def db_tier_members():
     return out
 
 
-def fetch_tier_members():
-    """(예비) 시너지가 매일 공개하는 명단. Supabase 티어 명단이 비어 있을 때만 쓴다."""
-    with urllib.request.urlopen(f'{SYNERGY_BASE}/data/dates.js', timeout=30) as res:
-        text = res.read().decode('utf-8')
-    m = re.search(r'window\.AVAILABLE_DATES\s*=\s*(\[[^\]]*\])', text)
-    if not m:
-        raise ValueError('dates.js 형식을 읽을 수 없습니다')
-    dates = json.loads(m.group(1))
-    if not dates:
-        raise ValueError('사용 가능한 날짜가 없습니다')
-    data = http_json(f'{SYNERGY_BASE}/data/daily/{dates[0]}.json')
-    out = []
-    for m2 in (data.get('members') or []):
-        team = str(m2.get('team') or '').strip()
-        if not m2.get('id') or not team or team in HIDDEN_TEAMS:
-            continue
-        out.append({
-            'id': str(m2['id']).strip(),
-            'nickname': str(m2.get('nickname') or '').strip(),
-            'elo_id': str(m2.get('elo_id') or '').strip(),   # eloboard 선수 번호(이게 있으면 바로 이어진다)
-            'team': team,
-            'tier': m2.get('tier'),
-            'race': str(m2.get('race') or '').strip(),
-        })
-    return dates[0], out
-
-
 def write_json(path, data):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + '.tmp'
@@ -198,20 +162,14 @@ def write_json(path, data):
 
 
 def resolve_tier_members(offline):
-    """티어표 명단을 구한다. Supabase(db.json) 우선, 없으면 시너지로 물러난다. 돌려주는 값: (tier_date, tier_members)."""
+    """중앙 파이프라인이 만든 임시 db.json에서 티어 명단을 읽는다."""
     if offline:
         return '', []
     tier_members = db_tier_members()
     if tier_members:
         print(f'  명단: Supabase tier_members {len(tier_members):,}명')
         return '', tier_members
-    try:                                     # DB 명단이 비어 있으면 예전처럼 시너지에서
-        tier_date, tier_members = fetch_tier_members()
-        print(f'  명단: 시너지 {len(tier_members):,}명 (Supabase tier_members가 비어 있음)')
-        return tier_date, tier_members
-    except Exception as e:                    # 명단을 못 받아도 파일은 만든다(이름만으로)
-        print(f'⚠️ 명단을 받지 못했습니다({e}). 이름/종족만으로 만듭니다.')
-        return '', []
+    raise RuntimeError('Supabase tier_members is empty; refusing incomplete ranking build')
 
 
 def link_tier_players(players, tier_members, alias):

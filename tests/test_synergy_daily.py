@@ -1,4 +1,7 @@
 from models.synergy_stats import MonthlyLiveStats, SponsorStats, SynergyRosterMember
+import pytest
+
+from jobs.sync_synergy_daily import _require_poonggo_coverage
 from processors.synergy_daily import build_daily_rows
 
 
@@ -39,3 +42,16 @@ def test_current_snapshot_uses_current_roster_metadata():
     assert row["nickname"] == "새닉"
     assert row["affiliation"] == "NEW"
     assert row["tier"] == "1"
+
+
+def test_partial_poonggo_response_is_not_published_as_zeroes():
+    roster = [
+        SynergyRosterMember(
+            soop_id=str(i), elo_id=None, nickname=str(i), role="",
+            affiliation=None, race=None, tier=None, modified_at=None,
+        )
+        for i in range(10)
+    ]
+    partial = {str(i): MonthlyLiveStats() for i in range(9)}
+    with pytest.raises(RuntimeError, match="coverage too small"):
+        _require_poonggo_coverage(roster, partial, "test")

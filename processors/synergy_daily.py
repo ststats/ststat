@@ -27,6 +27,8 @@ def build_daily_rows(
             "affiliation": member.affiliation,
             "race": member.race,
             "tier": member.tier,
+            "gender": member.gender,
+            "birth_date": member.birth_date,
             "balloons": live.balloons,
             "broadcast_seconds": live.broadcast_seconds,
             "cumulative_viewers": live.cumulative_viewers,

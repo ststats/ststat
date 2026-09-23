@@ -7,72 +7,91 @@ concurrency:
   group: ststat-main-pipeline
   cancel-in-progress: false
 
+env:
+  SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+  SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+  STSTAT_ENV: production
+  PYTHONUNBUFFERED: "1"
+
 jobs:
-  pipeline:
+  foundation:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
-
+    timeout-minutes: 20
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
+      - run: pip install -r requirements.txt
+      - run: python scripts/run_job.py healthcheck
+      - run: python scripts/run_job.py sync_roster
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Healthcheck
-        env:
-          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          STSTAT_ENV: production
-        run: python scripts/run_job.py healthcheck
-
-      - name: Sync roster
-        env:
-          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          STSTAT_ENV: production
-        run: python scripts/run_job.py sync_roster
-
+  eloboard:
+    needs: foundation
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
       - name: Sync EloBoard matches
         env:
-          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          STSTAT_ENV: production
           ELOBOARD_DELAY: "2.0"
           ELOBOARD_OVERLAP_DAYS: "3"
         run: python scripts/run_job.py sync_eloboard
 
-      - name: Calculate EloBoard derived stats
-        env:
-          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          STSTAT_ENV: production
-        run: python scripts/run_job.py calculate_eloboard_stats
+  derived:
+    needs: eloboard
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python scripts/run_job.py calculate_eloboard_stats
 
-      - name: Sync Synergy daily stats
-        env:
-          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          STSTAT_ENV: production
-        run: python scripts/run_job.py sync_synergy_daily
+  synergy:
+    needs: eloboard
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python scripts/run_job.py sync_synergy_daily
 
-      - name: Sync videos
-        env:
-          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
-          STSTAT_ENV: production
-        run: python scripts/run_job.py sync_videos
+  videos:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python scripts/run_job.py sync_videos
 
-      - name: Audit StarUniv match-round integrity
-        env:
-          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          STSTAT_ENV: production
-        run: python scripts/run_job.py audit_match_rounds
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python scripts/run_job.py audit_match_rounds

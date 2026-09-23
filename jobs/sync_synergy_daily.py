@@ -14,6 +14,7 @@ from repositories.synergy_stats import (
     existing_snapshot_count,
     get_month_confirmation,
     load_roster_for_synergy,
+    load_snapshot_roster,
     upsert_daily_snapshot,
     upsert_month_confirmation,
     upsert_poonggo_month,
@@ -22,6 +23,7 @@ from repositories.synergy_stats import (
 
 KST = ZoneInfo("Asia/Seoul")
 MIN_ROSTER_COUNT = 100
+MIN_POONGGO_COVERAGE = 1.0
 MAX_CONFIRM_MONTHS_PER_RUN = 12
 
 
@@ -48,7 +50,19 @@ def _month_end(month_start: date) -> date:
     return date(month_start.year, month_start.month, calendar.monthrange(month_start.year, month_start.month)[1])
 
 
-def _confirm_closed_months(roster, today: date) -> dict:
+def _require_poonggo_coverage(roster, poonggo, label: str) -> None:
+    expected = {m.soop_id for m in roster}
+    received = set(poonggo)
+    coverage = len(expected & received) / len(expected) if expected else 1.0
+    if coverage < MIN_POONGGO_COVERAGE:
+        missing = sorted(expected - received)
+        raise RuntimeError(
+            f"Poonggo {label} coverage too small: {coverage:.1%} "
+            f"({len(received)}/{len(expected)}); missing sample={missing[:10]}"
+        )
+
+
+def _confirm_closed_months(today: date) -> dict:
     # We only need to confirm months that already have a last-day snapshot in Supabase.
     # Start with previous month and walk back at most MAX_CONFIRM_MONTHS_PER_RUN; missing snapshots are skipped.
     checked = 0
@@ -61,6 +75,10 @@ def _confirm_closed_months(roster, today: date) -> dict:
         if existing_snapshot_count(last_day_str) == 0:
             month = _previous_month(month)
             continue
+
+        roster = load_snapshot_roster(last_day_str)
+        if not roster:
+            raise RuntimeError(f"Published snapshot roster is empty for {last_day_str}")
 
         month_start_str = month.isoformat()
         flags = get_month_confirmation(month_start_str)
@@ -77,8 +95,7 @@ def _confirm_closed_months(roster, today: date) -> dict:
         sponsor = None
         if not poonggo_ok:
             poonggo = fetch_monthly(month.year, month.month, [m.soop_id for m in roster])
-            if len(poonggo) < max(1, int(len(roster) * 0.5)):
-                raise RuntimeError(f"Poonggo closed-month result too small for {month_start_str}: {len(poonggo)}/{len(roster)}")
+            _require_poonggo_coverage(roster, poonggo, month_start_str)
             upsert_poonggo_month(month_start_str, poonggo)
             poonggo_rows += len(poonggo)
             poonggo_ok = True
@@ -91,6 +108,7 @@ def _confirm_closed_months(roster, today: date) -> dict:
         if poonggo is None:
             # Fetch again to reconstruct the confirmed last-day snapshot. This is deliberate and rare (once/month).
             poonggo = fetch_monthly(month.year, month.month, [m.soop_id for m in roster])
+            _require_poonggo_coverage(roster, poonggo, month_start_str)
         if sponsor is None:
             sponsor = aggregate_sponsor_stats(month_start_str, last_day_str)
 
@@ -115,8 +133,7 @@ def run() -> JobResult:
 
     soop_ids = [m.soop_id for m in roster]
     poonggo = fetch_monthly(today.year, today.month, soop_ids)
-    if len(poonggo) < max(1, int(len(roster) * 0.5)):
-        raise RuntimeError(f"Poonggo result unexpectedly small ({len(poonggo)}/{len(roster)}); refusing write")
+    _require_poonggo_coverage(roster, poonggo, stat_date)
 
     sponsor = aggregate_sponsor_stats(month_start_str, stat_date)
     rows = build_daily_rows(stat_date, month_start_str, roster, poonggo, sponsor)
@@ -127,7 +144,7 @@ def run() -> JobResult:
     daily_written = upsert_daily_snapshot(stat_date, rows)
 
     # Apply manual roster metadata corrections to existing historical snapshots.
-    corrected_members = []
+    corrected_members = {}
     corrected_rows = 0
     for member in roster:
         if not member.modified_at:
@@ -138,12 +155,12 @@ def run() -> JobResult:
             # Preserve malformed marker for admin review; never clear it automatically.
             continue
         corrected_rows += apply_roster_backfill(member, modified_date)
-        corrected_members.append(member.soop_id)
+        corrected_members[member.soop_id] = member.modified_at
 
     # Clear markers only after all affected member backfills have succeeded.
     cleared = clear_modified_at(corrected_members) if corrected_members else 0
 
-    confirmations = _confirm_closed_months(roster, today)
+    confirmations = _confirm_closed_months(today)
 
     return JobResult(
         records_read=len(roster) + len(poonggo),
@@ -162,6 +179,6 @@ def run() -> JobResult:
             "modified_at_cleared": cleared,
             "closed_months_checked": confirmations["checked"],
             "closed_months_confirmed": confirmations["confirmed"],
-            "legacy_json_parallel_write": True,
+            "atomic_daily_publish": True,
         },
     )

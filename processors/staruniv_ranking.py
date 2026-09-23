@@ -118,7 +118,7 @@ UNRANKED = '미분류'
 # 정보다) 순위에는 올리지 않는다 - 지금 뛰는 사람들의 줄 세우기여야 하기 때문.
 DORMANT_TEAM = '휴면'
 
-# 형식 가중치. 키는 eloboard 원본 코드(scripts/build_h2h.py의 CAT_LABELS와 같은 코드다).
+# 형식 가중치. 키는 EloBoard 원본 코드(staruniv_h2h.py의 CAT_LABELS와 같다).
 # 값은 시계열 홀드아웃으로 정했다. 두 가지를 따로 물어봤다.
 #
 # (1) 한 판당 대회가 스폰보다 실력을 더 말해주나? -> 그렇다.

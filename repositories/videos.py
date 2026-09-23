@@ -4,9 +4,6 @@ from datetime import datetime, timezone
 
 from repositories.supabase import get_supabase
 
-MAX_EXISTING = 5000
-
-
 def load_active_channels() -> list[dict]:
     db = get_supabase()
     rows = (
@@ -23,15 +20,23 @@ def load_active_channels() -> list[dict]:
 
 def load_existing_videos() -> dict[str, dict]:
     db = get_supabase()
-    rows = (
-        db.table("videos")
-        .select("id,channel_url,title,published,thumb,views,short,hidden")
-        .order("published", desc=True)
-        .limit(MAX_EXISTING)
-        .execute()
-        .data
-        or []
-    )
+    rows = []
+    start = 0
+    while True:
+        batch = (
+            db.table("videos")
+            .select("id,channel_url,title,published,thumb,views,short")
+            .order("published", desc=True)
+            .order("id")
+            .range(start, start + 999)
+            .execute()
+            .data
+            or []
+        )
+        rows.extend(batch)
+        if len(batch) < 1000:
+            break
+        start += 1000
     return {str(row["id"]): row for row in rows if row.get("id")}
 
 
@@ -61,7 +66,6 @@ def upsert_collected_videos(channel_url: str, items: list[dict], existing: dict[
         video_id = str(item.get("id") or "")
         if not video_id:
             continue
-        old = existing.get(video_id, {})
         payload.append({
             "id": video_id,
             "channel_url": channel_url,
@@ -70,8 +74,6 @@ def upsert_collected_videos(channel_url: str, items: list[dict], existing: dict[
             "thumb": item.get("thumb") or None,
             "views": int(item.get("views") or 0),
             "short": bool(item.get("short")),
-            # admin-owned: never reset a hidden video during sync
-            "hidden": bool(old.get("hidden", False)),
             "updated_at": now,
         })
     for start in range(0, len(payload), 300):

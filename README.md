@@ -1,95 +1,41 @@
-# ststat - Part 1 starter
+# ststat
 
-This is the safe foundation for the central data pipeline.
+StarUniv와 Synergy가 사용하는 중앙 배치 파이프라인입니다. 외부 데이터를 수집하고 계산한 뒤 공유 Supabase에 게시합니다.
 
-Part 1 does **not** move any StarUniv or Synergy collector yet. It only creates the common Supabase connection, job logging, ownership rules, and a manual GitHub Actions healthcheck.
+## 담당 영역
 
-## Architecture in Part 1
+- EloBoard 로스터 후보와 경기 수집
+- H2H, 종족전, 랭킹, 레이팅 스냅샷 계산
+- Poonggo 월 누적치와 Synergy 일별 통계 게시
+- YouTube 영상 메타데이터 수집
+- StarUniv 경기·라운드 무결성 감사
 
-- `ststat` conceptually owns the data domain.
-- The existing Cloudflare Worker keeps running every 2 minutes for realtime broadcast updates.
-- An external cron may trigger the GitHub Actions workflow every 4 hours for batch work.
-- Batch jobs are forbidden from overwriting realtime broadcast fields.
-- StarUniv admin continues to own manually managed content such as calendar/history/external tools.
+수동 편집 필드의 소유자는 StarUniv 관리자입니다. 세부 쓰기 경계는 `config/ownership.yml`에 있습니다.
 
-## 1. Create the repository
+## 실행
 
-Create a new GitHub repository named `ststat` and copy the contents of this folder into it.
+필수 환경변수:
 
-## 2. Run the Supabase migration once
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- 영상 작업용 `YOUTUBE_API_KEY`
 
-Open Supabase -> SQL Editor -> New query.
-
-Copy all of:
-
-`migrations/001_pipeline_base.sql`
-
-and click Run.
-
-This creates only `public.sync_jobs`.
-
-It does not modify members, matches, calendar, videos, or realtime broadcast tables.
-
-## 3. Add GitHub Actions settings
-
-Open the `ststat` GitHub repository:
-
-Settings -> Secrets and variables -> Actions
-
-Create a Repository Variable:
-
-- Name: `SUPABASE_URL`
-- Value: the same Supabase Project URL used by StarUniv
-
-Create a Repository Secret:
-
-- Name: `SUPABASE_SERVICE_ROLE_KEY`
-- Value: the server-side Supabase service role key
-
-Never put the service role key in browser JavaScript, Git files, README, or `.env` committed to Git.
-
-## 4. Push the files
-
-Example:
-
-```cmd
-git add .
-git commit -m "Initialize ststat pipeline foundation"
-git push origin main
+```powershell
+python -m pip install -r requirements.txt
+python -m pytest -q
+python scripts/run_job.py healthcheck
+python scripts/run_job.py sync_roster
+python scripts/run_job.py sync_eloboard
+python scripts/run_job.py calculate_eloboard_stats
+python scripts/run_job.py sync_synergy_daily
+python scripts/run_job.py sync_videos
+python scripts/run_job.py audit_match_rounds
 ```
 
-## 5. Run the first test
+운영에서는 `.github/workflows/run-pipeline.yml`을 외부 스케줄러가 호출합니다. 작업들은 실제 의존성에 따라 분리되어 Poonggo나 YouTube 한 곳의 장애가 다른 독립 작업을 막지 않습니다.
 
-GitHub -> Actions -> `Run ststat pipeline` -> Run workflow
+## DB 적용
 
-If successful, Supabase Table Editor -> `sync_jobs` should contain a row like:
+`migrations/001_*.sql`부터 번호 순서대로 같은 Supabase 프로젝트에 적용합니다. 웹 공개 뷰와 권한도 이 저장소의 migration에서만 관리합니다.
 
-- `job_name`: `healthcheck`
-- `status`: `success`
-
-## 6. Existing Cloudflare Worker
-
-Do not remove it.
-
-The worker continues to run every 2 minutes and update realtime broadcast information.
-
-In the target architecture this worker is considered part of the `ststat` data system, even if its code remains deployed separately on Cloudflare.
-
-Later we can either:
-
-1. keep the Worker in its current separate deployment, or
-2. move the Worker source code into the `ststat` repository while still deploying it to Cloudflare.
-
-Part 1 does not change the Worker.
-
-## 7. External 4-hour cron
-
-Part 1 deliberately has no GitHub cron schedule.
-
-The workflow is `workflow_dispatch` only so your external cron can trigger it every 4 hours.
-
-We will add actual batch jobs in later parts.
-
-## Next: Part 2
-
-Part 2 will centralize roster / `tier_members` handling and new-player candidate detection without moving EloBoard statistics yet.
+현재 일별 통계 게시 코드는 `008_atomic_daily_publish.sql`의 RPC를 요구하며, StarUniv/Synergy 공개 조회는 `009_public_web_views.sql`을 요구합니다.

@@ -131,9 +131,27 @@ def stage_unknown_elo_candidates(matches: list[EloMatch]) -> int:
     if not matches:
         return 0
     db = get_supabase()
-    roster_rows = db.table("tier_members").select("elo_id").execute().data or []
+    def paged_ids(table: str) -> list[dict]:
+        out = []
+        start = 0
+        while True:
+            batch = (
+                db.table(table)
+                .select("id,elo_id")
+                .order("id")
+                .range(start, start + 999)
+                .execute()
+                .data
+                or []
+            )
+            out.extend(batch)
+            if len(batch) < 1000:
+                return out
+            start += 1000
+
+    roster_rows = paged_ids("tier_members")
     known = {int(r["elo_id"]) for r in roster_rows if r.get("elo_id") is not None}
-    pending_rows = db.table("tier_member_candidates").select("elo_id").execute().data or []
+    pending_rows = paged_ids("tier_member_candidates")
     pending = {int(r["elo_id"]) for r in pending_rows if r.get("elo_id") is not None}
 
     players = {}

@@ -25,9 +25,10 @@ def load_roster_for_synergy() -> list[SynergyRosterMember]:
             db.table("tier_members")
             .select(
                 "soop_id,elo_id,nickname,role,affiliation,"
-                "race,tier,modified_at,source_order"
+                "race,tier,gender,birth_date,modified_at,source_order,id"
             )
             .order("source_order")
+            .order("id")
             .range(start, start + page_size - 1)
             .execute()
         )
@@ -60,6 +61,8 @@ def load_roster_for_synergy() -> list[SynergyRosterMember]:
                 race=(str(row.get("race") or "").strip() or None),
                 tier=(str(row.get("tier") or "").strip() or None),
                 modified_at=(str(row.get("modified_at") or "").strip() or None),
+                gender=(str(row.get("gender") or "").strip() or None),
+                birth_date=(str(row.get("birth_date") or "").strip() or None),
             )
         )
     return out
@@ -128,12 +131,61 @@ def upsert_poonggo_month(month_start: str, data: dict[str, MonthlyLiveStats]) ->
 def upsert_daily_snapshot(stat_date: str, rows: list[dict]) -> int:
     if not rows:
         raise RuntimeError("Refusing to write empty Synergy daily snapshot")
-    db = get_supabase()
-    for i in range(0, len(rows), 500):
-        db.table("daily_member_stats").upsert(
-            rows[i:i + 500], on_conflict="stat_date,soop_id"
-        ).execute()
+    if any(str(row.get("stat_date") or "") != stat_date for row in rows):
+        raise RuntimeError("Daily snapshot contains rows for a different date")
+    if len({str(row.get("soop_id") or "") for row in rows}) != len(rows):
+        raise RuntimeError("Daily snapshot contains duplicate SOOP ids")
+    get_supabase().rpc(
+        "publish_daily_member_stats",
+        {"p_stat_date": stat_date, "p_rows": rows},
+    ).execute()
     return len(rows)
+
+
+def load_daily_snapshot_rows(stat_date: str) -> list[dict]:
+    db = get_supabase()
+    rows: list[dict] = []
+    start = 0
+    while True:
+        batch = (
+            db.table("daily_member_stats")
+            .select(
+                "stat_date,month_start,soop_id,elo_id,nickname,role,affiliation,"
+                "race,tier,gender,birth_date,balloons,broadcast_seconds,"
+                "cumulative_viewers,sponsor_wins,sponsor_losses,updated_at,"
+                "sponsor_updated_at"
+            )
+            .eq("stat_date", stat_date)
+            .order("soop_id")
+            .range(start, start + PAGE_SIZE - 1)
+            .execute()
+            .data
+            or []
+        )
+        rows.extend(batch)
+        if len(batch) < PAGE_SIZE:
+            break
+        start += PAGE_SIZE
+    return rows
+
+
+def load_snapshot_roster(stat_date: str) -> list[SynergyRosterMember]:
+    rows = load_daily_snapshot_rows(stat_date)
+    return [
+        SynergyRosterMember(
+            soop_id=str(row["soop_id"]),
+            elo_id=int(row["elo_id"]) if row.get("elo_id") is not None else None,
+            nickname=str(row.get("nickname") or ""),
+            role=str(row.get("role") or ""),
+            affiliation=row.get("affiliation"),
+            race=row.get("race"),
+            tier=row.get("tier"),
+            modified_at=None,
+            gender=row.get("gender"),
+            birth_date=str(row.get("birth_date") or "") or None,
+        )
+        for row in rows
+    ]
 
 
 def existing_snapshot_count(stat_date: str) -> int:
@@ -157,6 +209,8 @@ def apply_roster_backfill(member: SynergyRosterMember, from_date: str) -> int:
         "affiliation": member.affiliation,
         "race": member.race,
         "tier": member.tier,
+        "gender": member.gender,
+        "birth_date": member.birth_date,
     }
     result = (
         db.table("daily_member_stats")
@@ -168,14 +222,20 @@ def apply_roster_backfill(member: SynergyRosterMember, from_date: str) -> int:
     return len(result.data or [])
 
 
-def clear_modified_at(soop_ids: list[str]) -> int:
-    if not soop_ids:
+def clear_modified_at(markers: dict[str, str]) -> int:
+    if not markers:
         return 0
     db = get_supabase()
     written = 0
-    for soop_id in soop_ids:
-        db.table("tier_members").update({"modified_at": None}).eq("soop_id", soop_id).execute()
-        written += 1
+    for soop_id, marker in markers.items():
+        result = (
+            db.table("tier_members")
+            .update({"modified_at": None})
+            .eq("soop_id", soop_id)
+            .eq("modified_at", marker)
+            .execute()
+        )
+        written += len(result.data or [])
     return written
 
 
@@ -214,31 +274,28 @@ def update_closed_month_numeric_stats(
     Historical roster metadata (team/tier/name/race/role) must stay as it was for that
     date unless a modified_at backfill explicitly changes it.
     """
-    db = get_supabase()
-    written = 0
-    for member in roster:
+    rows = load_daily_snapshot_rows(stat_date)
+    if not rows:
+        raise RuntimeError(f"Cannot finalize missing daily snapshot {stat_date}")
+    members = {member.soop_id: member for member in roster}
+    now = datetime.now(timezone.utc).isoformat()
+    for row in rows:
+        member = members.get(str(row.get("soop_id") or ""))
+        if member is None:
+            raise RuntimeError(f"Snapshot member missing from finalization roster: {row.get('soop_id')}")
         live = poonggo.get(member.soop_id)
         sponsor_stats = sponsor.get(member.elo_id) if member.elo_id is not None else None
-        payload = {}
         if live is not None:
-            payload.update({
+            row.update({
                 "balloons": live.balloons,
                 "broadcast_seconds": live.broadcast_seconds,
                 "cumulative_viewers": live.cumulative_viewers,
             })
         # A successful EloBoard DB aggregation means absence == zero for the month.
-        payload.update({
+        row.update({
             "sponsor_wins": sponsor_stats.wins if sponsor_stats else 0,
             "sponsor_losses": sponsor_stats.losses if sponsor_stats else 0,
-            "sponsor_updated_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": now,
+            "sponsor_updated_at": now,
         })
-        if payload:
-            result = (
-                db.table("daily_member_stats")
-                .update(payload)
-                .eq("stat_date", stat_date)
-                .eq("soop_id", member.soop_id)
-                .execute()
-            )
-            written += len(result.data or [])
-    return written
+    return upsert_daily_snapshot(stat_date, rows)

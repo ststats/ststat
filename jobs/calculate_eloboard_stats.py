@@ -33,10 +33,18 @@ def run() -> JobResult:
     try:
         counts = write_snapshot(snapshot_id, payload)
         activate_snapshot(snapshot_id)
-        cleanup_old_snapshots(keep=3)
     except Exception as exc:
         mark_failed(snapshot_id, str(exc))
         raise
+
+    # Activation is the publish boundary. Cleanup is maintenance after a
+    # successful publish and must never turn the only active snapshot into a
+    # failed one. A later run can safely retry cleanup.
+    cleanup_warning = None
+    try:
+        cleanup_old_snapshots(keep=3)
+    except Exception as exc:
+        cleanup_warning = f"{type(exc).__name__}: {exc}"[:3000]
 
     written = sum(counts.values())
     return JobResult(
@@ -53,5 +61,6 @@ def run() -> JobResult:
             'ranked_players': counts['rankings'],
             'rating_history_rows': counts['history'],
             'safe_snapshot_swap': True,
+            'cleanup_warning': cleanup_warning,
         },
     )
