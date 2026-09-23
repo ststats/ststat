@@ -61,3 +61,11 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           STSTAT_ENV: production
         run: python scripts/run_job.py sync_synergy_daily
+
+      - name: Sync videos
+        env:
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          STSTAT_ENV: production
+        run: python scripts/run_job.py sync_videos

@@ -1,0 +1,12 @@
+from collectors.youtube_videos import iso_duration_sec
+
+
+def test_iso_duration():
+    assert iso_duration_sec("PT1H2M3S") == 3723
+    assert iso_duration_sec("PT2M59S") == 179
+    assert iso_duration_sec("PT45S") == 45
+
+
+def test_invalid_duration_is_zero():
+    assert iso_duration_sec("") == 0
+    assert iso_duration_sec("bad") == 0

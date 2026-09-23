@@ -109,3 +109,45 @@ synergy_daily_stats:
     - "A Poonggo partial/undersized response aborts the snapshot write."
     - "tier_members.modified_at is cleared only after historical daily_member_stats metadata backfill succeeds."
     - "No StarUniv/Synergy web read path is changed in Part 5."
+
+
+video_collection:
+  owner: ststat
+  executor: external_cron_to_github_actions
+  cadence: "after synergy daily stats (normally every 4 hours)"
+  sources:
+    - youtube_data_api_v3
+    - youtube_rss_fallback
+  reads_tables:
+    - video_channels
+    - videos
+  owns:
+    video_channels:
+      - channel_id
+      - title
+      - thumb
+      - uploads
+      - updated_at
+    videos:
+      - channel_url
+      - title
+      - published
+      - thumb
+      - views
+      - short
+      - updated_at
+  admin_owned_and_protected:
+    video_channels:
+      - channel_url
+      - display_name
+      - source_order
+      - active
+    videos:
+      - hidden
+    video_picks:
+      - "*"
+  rules:
+    - "ststat never creates/deletes admin channel configuration."
+    - "ststat never overwrites videos.hidden."
+    - "video_picks remain fully owned by StarUniv admin."
+    - "If all channels fail, the job fails and the previous good database contents remain untouched."
