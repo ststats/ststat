@@ -3,36 +3,39 @@ import sys
 import uuid
 from datetime import datetime, timezone
 from importlib import import_module
-
-<<<<<<< HEAD
-=======
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
->>>>>>> 733d267 (Initial ststat pipeline setup)
 from repositories.supabase import get_supabase
 
 
-def utc_now() -> str:
+def utc_now():
     return datetime.now(timezone.utc).isoformat()
 
 
-def main() -> None:
+def main():
     if len(sys.argv) != 2:
         raise SystemExit("Usage: python scripts/run_job.py <job_name>")
 
     job_name = sys.argv[1]
     run_id = os.getenv("GITHUB_RUN_ID") or str(uuid.uuid4())
+
     db = get_supabase()
 
-    inserted = db.table("sync_jobs").insert({
-        "job_name": job_name,
-        "run_id": run_id,
-        "status": "running",
-    }).execute()
+    inserted = (
+        db.table("sync_jobs")
+        .insert({
+            "job_name": job_name,
+            "run_id": run_id,
+            "status": "running",
+        })
+        .execute()
+    )
+
     sync_job_id = inserted.data[0]["id"]
 
     try:
@@ -48,12 +51,14 @@ def main() -> None:
             "source_cursor": result.source_cursor,
             "metadata": result.metadata,
         }).eq("id", sync_job_id).execute()
+
     except Exception as exc:
         db.table("sync_jobs").update({
             "status": "failed",
             "finished_at": utc_now(),
             "error_message": str(exc)[:5000],
         }).eq("id", sync_job_id).execute()
+
         raise
 
 
