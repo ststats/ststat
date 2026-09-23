@@ -56,8 +56,13 @@ def fetch_monthly(year: int, month: int, soop_ids: list[str]) -> dict[str, Month
     if not soop_ids:
         return {}
 
-    result: dict[str, MonthlyLiveStats] = {}
+    # Poonggo는 정상 응답에서도 해당 월 방송 기록이 없는 ID를 배열에서 생략한다.
+    # 누락을 수집 실패로 해석하면 월초나 비활성 선수가 많을 때 정상 실행이 중단되므로,
+    # 요청이 성공한 ID는 먼저 0으로 채우고 실제 응답만 덮어쓴다.
     canonical_ids = {str(value).lower(): str(value) for value in soop_ids}
+    result: dict[str, MonthlyLiveStats] = {
+        value: MonthlyLiveStats() for value in canonical_ids.values()
+    }
     chunks = list(_chunks(list(canonical_ids.values()), IDS_PER_REQUEST))
     date_str = f"{year:04d}-{month:02d}-01"
 
@@ -76,7 +81,10 @@ def fetch_monthly(year: int, month: int, soop_ids: list[str]) -> dict[str, Month
             soop_id = str(entry.get("id") or "").strip()
             if not soop_id:
                 continue
-            soop_id = canonical_ids.get(soop_id.lower(), soop_id)
+            soop_id = canonical_ids.get(soop_id.lower())
+            if soop_id is None:
+                # 요청하지 않은 계정이 섞인 응답은 로스터 통계에 포함하지 않는다.
+                continue
             result[soop_id] = MonthlyLiveStats(
                 balloons=_to_int(entry.get("amt")),
                 broadcast_seconds=_to_int(entry.get("broadTime")),

@@ -51,6 +51,8 @@ def _month_end(month_start: date) -> date:
 
 
 def _require_poonggo_coverage(roster, poonggo, label: str) -> None:
+    # fetch_monthly는 정상 응답에서 생략된 무방송 ID를 0으로 채운다. 따라서 여기서의
+    # 누락은 호출자가 불완전한 결과를 넘겼거나 수집기 계약이 깨진 경우만 뜻한다.
     expected = {m.soop_id for m in roster}
     received = set(poonggo)
     coverage = len(expected & received) / len(expected) if expected else 1.0
