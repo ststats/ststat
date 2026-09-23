@@ -89,3 +89,23 @@ derived_eloboard_stats:
     - "The current StarUniv H2H/ranking algorithm is preserved during migration."
     - "StarUniv legacy h2h/ranking JSON remains fallback until the web migration step."
     - "This job never updates tier_members or realtime broadcast fields."
+
+synergy_daily_stats:
+  owner: ststat
+  executor: external_cron_to_github_actions
+  cadence: "after calculate_eloboard_stats (normally every 4 hours)"
+  external_source:
+    - poonggo_monthly_api
+  source_tables:
+    - tier_members
+    - elo_matches
+  owns_tables:
+    - poonggo_monthly_stats
+    - daily_member_stats
+    - synergy_month_confirmations
+  protected_behavior:
+    - "Synergy legacy latest.json/archive remain active during Part 5 validation."
+    - "Sponsor stats are calculated from the centralized elo_matches table; EloBoard is not fetched a second time."
+    - "A Poonggo partial/undersized response aborts the snapshot write."
+    - "tier_members.modified_at is cleared only after historical daily_member_stats metadata backfill succeeds."
+    - "No StarUniv/Synergy web read path is changed in Part 5."
