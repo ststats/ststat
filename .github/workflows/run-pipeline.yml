@@ -47,3 +47,10 @@ jobs:
           ELOBOARD_DELAY: "2.0"
           ELOBOARD_OVERLAP_DAYS: "3"
         run: python scripts/run_job.py sync_eloboard
+
+      - name: Calculate EloBoard derived stats
+        env:
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          STSTAT_ENV: production
+        run: python scripts/run_job.py calculate_eloboard_stats

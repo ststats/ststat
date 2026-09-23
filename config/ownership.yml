@@ -65,3 +65,27 @@ rules:
   - "Roster sync may update only explicitly auto-owned tier_members columns."
   - "EloBoard sync may write only elo_* source tables and candidate staging."
   - "New players must never be auto-inserted into tier_members."
+
+derived_eloboard_stats:
+  owner: ststat
+  executor: external_cron_to_github_actions
+  cadence: "after sync_eloboard (normally every 4 hours)"
+  source_tables:
+    - elo_matches
+    - elo_players
+    - elo_maps
+    - elo_categories
+    - tier_members
+  owns_tables:
+    - elo_derived_snapshots
+    - elo_player_stats
+    - elo_h2h_stats
+    - elo_race_stats
+    - elo_rankings
+    - elo_ranking_meta
+    - elo_rating_history
+  rules:
+    - "Derived stats are written as a new snapshot and activated only after the full calculation succeeds."
+    - "The current StarUniv H2H/ranking algorithm is preserved during migration."
+    - "StarUniv legacy h2h/ranking JSON remains fallback until the web migration step."
+    - "This job never updates tier_members or realtime broadcast fields."
