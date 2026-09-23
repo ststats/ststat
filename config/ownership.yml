@@ -1,0 +1,40 @@
+realtime:
+  owner: ststat
+  executor: cloudflare_worker
+  cadence: "2 minutes"
+  description: "Realtime broadcast state is part of the ststat data domain, but the existing Cloudflare Worker remains the execution mechanism."
+  owns:
+    - live broadcast status
+    - realtime viewer count
+    - current broadcast metadata
+    - realtime checked timestamps
+
+batch:
+  owner: ststat
+  executor: external_cron_to_github_actions
+  cadence: "4 hours"
+  owns:
+    - eloboard source data
+    - poonggo source data
+    - automatic youtube collection
+    - h2h stats
+    - rankings
+    - race stats
+    - daily stats
+    - historical backfill
+
+staruniv_admin:
+  owner: staruniv_admin
+  owns:
+    - calendar
+    - off-air schedule
+    - history
+    - external tools
+    - manual video picks
+    - manually managed roster fields
+    - team and member manual overrides
+
+rules:
+  - "Batch jobs must never overwrite realtime broadcast fields."
+  - "Realtime worker must never overwrite batch-derived statistics."
+  - "Automated collectors must not overwrite manual admin fields unless an explicit ownership rule exists."
