@@ -151,3 +151,24 @@ video_collection:
     - "ststat never overwrites videos.hidden."
     - "video_picks remain fully owned by StarUniv admin."
     - "If all channels fail, the job fails and the previous good database contents remain untouched."
+
+
+match_round_integrity:
+  owner: ststat
+  executor: github_actions
+  cadence: "every main pipeline run"
+  base_tables:
+    matches:
+      writer: staruniv_admin
+    rounds:
+      writer: staruniv_admin
+  ststat_responsibility:
+    - validate rounds.match_no integrity
+    - detect match/round metadata mismatches
+    - provide read-only rounds_effective internal-mirror view
+    - log integrity results to sync_jobs
+  protected_rules:
+    - "ststat does not rewrite matches or rounds."
+    - "ststat does not infer a new match_no for modern Supabase rows."
+    - "ststat does not physically insert mirrored internal rounds."
+    - "admin-owned match/round fields remain authoritative."
