@@ -2,7 +2,7 @@ name: Backfill EloBoard matches
 
 # 누락·삭제된 EloBoard 경기를 복구할 때 수동으로 한 번 돌린다.
 # 이미 받은 경기까지 처음부터 끝까지 다시 읽어 upsert하고, 아무것도 지우지 않는다.
-# 전체 약 35만 경기(≈1,900페이지)라 30~60분 걸린다.
+# 전체 약 35만 경기(≈1,900페이지) · 2초 간격이라 1시간 반 정도 걸린다.
 on:
   workflow_dispatch:
 
@@ -30,5 +30,6 @@ jobs:
       - name: Re-read all EloBoard matches
         env:
           ELOBOARD_BACKFILL: "1"
-          ELOBOARD_DELAY: "0.5"
+          # EloBoard 요청: 페이지 사이 2초 간격을 지킨다(줄이지 말 것)
+          ELOBOARD_DELAY: "2.0"
         run: python scripts/run_job.py sync_eloboard
