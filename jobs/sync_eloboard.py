@@ -103,8 +103,7 @@ def run() -> JobResult:
         if reached and oldest and oldest < cutoff:
             finished = True
             break
-        if DEFAULT_DELAY:
-            time.sleep(DEFAULT_DELAY)
+        time.sleep(DEFAULT_DELAY)  # EloBoard 요청: 페이지 사이 최소 2초(collectors/eloboard.py MIN_DELAY)
     else:
         raise RuntimeError(f"EloBoard collection hit max pages ({MAX_PAGES}); refusing partial write")
 
