@@ -47,5 +47,5 @@ python scripts/run_job.py audit_match_rounds
 - 정기 수집은 이번 달 1일(매월 1~7일은 지난달 1일)부터 다시 읽습니다. 사라진 경기 삭제는 그 기간 안에서만,
   기간 경기 수의 2%(최소 50건)까지만 하고 넘으면 지우지 않습니다.
 - `backfill-eloboard.yml`: 누락 복구용으로 EloBoard 전체를 다시 읽어 upsert합니다(삭제 없음, 1시간 반 안팎).
-- `restore-eloboard-json.yml`: staruniv에 남아 있던 2026-09-22 경기 백업 JSON을 다시 넣는 일회용 복구 작업입니다.
+- 2026-09-24 경기 삭제 사고는 staruniv에 남아 있던 2026-09-22 백업 JSON으로 복구했다(복구 작업은 끝나서 코드 삭제, git 기록 `b38249f`에 있음).
 - 티어 랭킹 모델 설명: staruniv 저장소 `notes/TIER_RANKING_MODEL_2026-09-23.md`, 계산 코드는 `processors/staruniv_ranking.py`.
