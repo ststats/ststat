@@ -17,13 +17,32 @@ from repositories.eloboard import (
 )
 
 OVERLAP_DAYS = int(os.getenv("ELOBOARD_OVERLAP_DAYS", "3"))
+# 이미 받은 경기도 '지난달 1일'까지는 매번 다시 읽는다(달 수로 지정, 1 = 이번 달만).
+# EloBoard는 누락됐던 과거 경기를 나중에 복구하거나 뒤늦게 등록하는 일이 있는데,
+# 최근 3일만 다시 읽으면 그런 경기를 영영 못 받는다. 시너지 스폰판수가 이번 달
+# 경기로 세므로 그대로 적게 나왔다(예: 먼진 EloBoard 30판+ vs 시너지 19판).
+# 예전 시너지 수집기도 매번 그달 처음까지 거슬러 읽었다. 지난달까지 포함하는 건
+# 월초의 '지난달 확정' 집계도 빠짐없이 하기 위해서다.
+RESCAN_MONTHS = max(1, int(os.getenv("ELOBOARD_RESCAN_MONTHS", "2")))
+KST = dt.timezone(dt.timedelta(hours=9))
+
+
+def rescan_cutoff(today: dt.date, overlap_days: int = OVERLAP_DAYS,
+                  rescan_months: int = RESCAN_MONTHS) -> str:
+    """다시 읽을 가장 이른 경기 날짜: 최근 overlap_days와 (rescan_months-1)달 전 1일 중 이른 쪽."""
+    year, month = today.year, today.month - (rescan_months - 1)
+    while month < 1:
+        year, month = year - 1, month + 12
+    month_start = dt.date(year, month, 1)
+    return min(today - dt.timedelta(days=overlap_days), month_start).isoformat()
 MAX_PAGES = int(os.getenv("ELOBOARD_MAX_PAGES", "4000"))
 MIN_VALID_RATIO = 0.95
 
 
 def run() -> JobResult:
     stop_at = get_latest_match_id()
-    cutoff = (dt.date.today() - dt.timedelta(days=OVERLAP_DAYS)).isoformat() if stop_at else ""
+    today_kst = dt.datetime.now(KST).date()
+    cutoff = rescan_cutoff(today_kst) if stop_at else ""
 
     parsed: dict[int, EloMatch] = {}
     seen_ids: set[int] = set()
@@ -115,6 +134,8 @@ def run() -> JobResult:
             "ceiling": ceiling,
             "min_seen": min_seen,
             "overlap_days": OVERLAP_DAYS,
+            "rescan_months": RESCAN_MONTHS,
+            "rescan_from": cutoff,
             "matches_upserted": upserted,
             "matches_deleted": deleted,
             "candidate_players_staged": candidates,
