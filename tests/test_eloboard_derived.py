@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from processors.eloboard_derived import aggregate_source, rankings_from_index
+from processors.eloboard_derived import aggregate_source, player_ratings_from_index, rankings_from_index
 
 
 def test_aggregate_source_directional_h2h_and_race():
@@ -30,7 +30,7 @@ def test_rankings_from_index():
             'asOf': '2026-09-23', 'halfLifeDays': 90, 'halfLifeTierDays': 540,
             'recentDays': 365, 'minRecentGames': 10,
             'tierCounts': {'킹': 1}, 'tierLevels': {'킹': 2100.0},
-            'backtest': {'status': 'ok', 'recommendedProfile': 'production'},
+            'raceMatchup': {'TZ': 12.5, 'ZP': -3.0, 'PT': 4.0},
         },
         'players': {
             '10': {
@@ -45,4 +45,20 @@ def test_rankings_from_index():
     assert rows[0]['tier_rank'] == 1
     assert rows[0]['recent_90_wins'] == 6
     assert meta['half_life_tier_days'] == 540
-    assert meta['backtest']['recommendedProfile'] == 'production'
+    assert 'backtest' not in meta
+    assert meta['race_matchup']['TZ'] == 12.5
+
+
+def test_player_ratings_include_unranked_players():
+    index = {
+        'ranking': {'asOf': '2026-09-23'},
+        'players': {
+            '10': {'t': '킹', 'k': 1, 'theta': 2110.0, 'thetaSE': 40.0},
+            '11': {'theta': 1720.0, 'thetaSE': 120.0},          # 순위 밖(티어 없음)
+            '12': {'t': '1'},                                   # 맞춘 경기 없음
+        },
+    }
+    rows = {r['elo_id']: r for r in player_ratings_from_index(index)}
+    assert set(rows) == {10, 11}
+    assert rows[11]['rating'] == 1720.0 and rows[11]['rating_se'] == 120.0
+    assert rows[10]['as_of'] == '2026-09-23'

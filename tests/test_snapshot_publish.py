@@ -14,7 +14,7 @@ def test_cleanup_failure_does_not_mark_active_snapshot_failed():
         patch.object(calculate_eloboard_stats, "create_snapshot", return_value="snapshot"),
         patch.object(calculate_eloboard_stats, "write_snapshot", return_value={
             "player_stats": 1, "h2h": 1, "race": 1,
-            "rankings": 1, "history": 1, "meta": 1,
+            "rankings": 1, "player_ratings": 1, "history": 1, "meta": 1,
         }),
         patch.object(calculate_eloboard_stats, "activate_snapshot") as activate,
         patch.object(calculate_eloboard_stats, "cleanup_old_snapshots", side_effect=RuntimeError("cleanup")),

@@ -72,7 +72,7 @@ def test_fit_enforces_tier_order_even_when_results_push_toward_inversion():
     win_tier = np.asarray([1], dtype=np.int64)
     lose_tier = np.asarray([0], dtype=np.int64)
     lam = np.asarray([100.0, 100.0])
-    levels, _delta = fit(
+    levels, _delta, _race = fit(
         wi, li, ww, win_tier, lose_tier, lam, 2, len(TIER_ORDER) + 1)
 
     assert np.all(levels[:len(TIER_ORDER) - 1] >= levels[1:len(TIER_ORDER)])

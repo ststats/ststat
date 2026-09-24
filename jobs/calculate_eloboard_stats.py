@@ -29,10 +29,9 @@ def run() -> JobResult:
         match_count,
         {
             'source': 'elo_matches',
-            'ranking_algorithm': 'staruniv_monotone_promotion_v3',
+            'ranking_algorithm': 'staruniv_current_tier_delta_race_v4',
             'safe_swap': True,
             'history_cache_reused': bool(history_cache),
-            'ranking_backtest': payload['ranking_meta'].get('backtest') or {},
             **cache_metadata,
         },
     )
@@ -65,10 +64,10 @@ def run() -> JobResult:
             'h2h_rows': counts['h2h'],
             'race_rows': counts['race'],
             'ranked_players': counts['rankings'],
+            'rated_players': counts['player_ratings'],
             'rating_history_rows': counts['history'],
             'safe_snapshot_swap': True,
             'history_cache_reused': bool(history_cache),
-            'ranking_backtest_status': (payload['ranking_meta'].get('backtest') or {}).get('status'),
             'cleanup_warning': cleanup_warning,
         },
     )

@@ -10,7 +10,9 @@ import sys
 import tempfile
 
 
-RANKING_HISTORY_CACHE_VERSION = 'ranking-2026-09-23-v3'
+# v4: 순위·이력이 θ-1.5SE에서 θ로 바뀌고, δ를 현재 티어로 맞추며 종족 상성이 들어갔다.
+# 이전 버전으로 계산한 마감 월 캐시는 값의 뜻이 달라 재사용하면 안 된다.
+RANKING_HISTORY_CACHE_VERSION = 'ranking-2026-09-24-v4'
 
 
 def history_cache_metadata(source: dict) -> dict:
@@ -207,8 +209,22 @@ def rankings_from_index(index: dict) -> tuple[list[dict], dict]:
         'min_recent_games': int(meta.get('minRecentGames') or 0),
         'tier_counts': tier_counts,
         'tier_levels': meta.get('tierLevels') or {},
-        'backtest': meta.get('backtest') or {},
+        'race_matchup': meta.get('raceMatchup') or {},
     }
+
+
+def player_ratings_from_index(index: dict) -> list[dict]:
+    """순위와 상관없이 맞춘 모든 선수의 θ와 표준오차(Elo 점수 단위)."""
+    as_of = (index.get('ranking') or {}).get('asOf')
+    rows = []
+    for pid, p in (index.get('players') or {}).items():
+        if p.get('theta') is None:
+            continue
+        rows.append({
+            'elo_id': int(pid), 'rating': p['theta'], 'rating_se': p.get('thetaSE'),
+            'as_of': as_of,
+        })
+    return rows
 
 
 def history_rows(rating: dict) -> list[dict]:
@@ -232,11 +248,13 @@ def build_payload(source: dict, processor_dir: Path,
     index, rating = run_staruniv_algorithm(source, processor_dir, history_cache)
     rankings, ranking_meta = rankings_from_index(index)
     history = history_rows(rating)
+    player_ratings = player_ratings_from_index(index)
     payload = {
         'player_stats': player_stats,
         'h2h': h2h,
         'race_stats': race_stats,
         'rankings': rankings,
+        'player_ratings': player_ratings,
         'ranking_meta': ranking_meta,
         'rating_history': history,
     }
@@ -254,5 +272,7 @@ def validate_payload(source: dict, payload: dict):
         raise RuntimeError('Derived H2H rows unexpectedly small')
     if not payload['rankings']:
         raise RuntimeError('Ranking algorithm produced zero ranked players')
+    if len(payload['player_ratings']) < len(payload['rankings']):
+        raise RuntimeError('Player ratings unexpectedly fewer than ranked players')
     if not payload['ranking_meta'].get('as_of'):
         raise RuntimeError('Ranking metadata missing as_of')

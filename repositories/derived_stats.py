@@ -107,12 +107,10 @@ def write_snapshot(snapshot_id: str, payload: dict) -> dict:
         'h2h': _insert('elo_h2h_stats', payload['h2h'], snapshot_id),
         'race': _insert('elo_race_stats', payload['race_stats'], snapshot_id),
         'rankings': _insert('elo_rankings', payload['rankings'], snapshot_id),
+        'player_ratings': _insert('elo_player_ratings', payload['player_ratings'], snapshot_id),
         'history': _insert('elo_rating_history', payload['rating_history'], snapshot_id),
     }
     meta = dict(payload['ranking_meta'], snapshot_id=snapshot_id)
-    # 백테스트 상세는 스냅샷 metadata에 저장한다. elo_ranking_meta의 고정 공개 스키마에는
-    # 넣지 않아 별도 DB 마이그레이션 없이도 기존 운영 DB에서 즉시 실행할 수 있다.
-    meta.pop('backtest', None)
     get_supabase().table('elo_ranking_meta').insert(meta).execute()
     counts['meta'] = 1
     return counts

@@ -59,18 +59,21 @@ build_h2h.py가 index.json을 만든 뒤에 돌린다(그 파일을 읽어서 �
 HALF_LIFE_TIER_DAYS 주석에 적어뒀다. 이 2단을 넣고서야 티어 기준선 15칸이 처음으로
 한 번도 안 뒤집히고 갓 -> 베이비까지 순서대로 섰다.
 
-[순위는 θ가 아니라 '보수 추정'으로 매긴다 - 여기서도 한 번 틀렸다]
+[순위는 θ로 매긴다 - '보수 추정'을 거쳐 되돌아왔다]
 처음엔 θ 순서 그대로 줄을 세웠더니 스페이드티어 1위가 최근 1년에 2판 둔 사람이었다.
-버그는 아니었다 - 그 사람은 옛날 전적으로 +0.163을 실제로 벌었다. 문제는 티어 안 편차의
-폭이 좁아서(스페이드티어 δ 중앙값 +0.022) 13판짜리 추정과 870판짜리 추정을 같은 확신으로
-줄 세운 것이었다. 그래서 순위는 θ에서 그 추정의 표준오차를 뺀 값으로 매긴다:
+그래서 한동안 θ - 1.5·표준오차(보수 추정)로 줄을 세웠는데, 티어 안 편차 폭이 좁아서
+(스페이드티어 δ 중앙값 +0.022) 이번엔 표준오차 항이 순서를 정했다 - 실력이 같아도
+많이 둔 사람이 위로 갔다(합성 데이터에서 평균 실력·2배 경기량 선수가 16위 -> 7위).
+2판짜리가 1위에 서던 문제는 δ prior와 '최근 1년 MIN_RECENT_GAMES판 이상' 문턱이
+막으므로, 지금은 θ로 줄 세우고 표준오차는 '데이터 티어' 판정 구간에만 쓴다.
 
-    순위 점수 = θ - 표준오차,   표준오차 = 1 / sqrt(prior 정밀도 + Σ w·p(1-p))
+[승급 직후 - 2단은 지금 티어 기준선으로]
+티어 기준선 m은 경기 당시 티어로 맞추지만(승급 전 성적이 새 티어 기준선을 끌어올리지
+않게), 개인 편차 δ는 지금 티어 기준선으로 맞춘다. 당시 티어로 맞추면 옛 티어에서
+번 δ가 새 티어 위에 그대로 얹혀 승급자가 곧바로 새 티어 상위권에 섰다(solve_two_stage 주석).
 
-표본이 두꺼우면 표준오차가 작아 제자리를 지키고(짭제 0.069), 얇으면 아래로 내려간다
-(유민 0.410). 갓·킹티어 상위권은 그대로였고, 스페이드티어 1위만 2판짜리에서 68판짜리로
-바뀌었다. 여기에 '최근 1년 MIN_RECENT_GAMES판 이상'이라는 눈에 보이는 문턱을 하나 더 둬서,
-사실상 안 둔 사람은 순위에 올리지 않고 '기록 없음'으로 남긴다.
+[종족 상성]
+전 선수 공통의 종족 간 유불리 3개(테→저, 저→토, 토→테)를 m과 함께 긴 창에서 맞춘다.
 
 [경기 가중치]
 형식마다 중요도가 다르고(개인대회=대학대회 > 대학대전 > 미니대전 > 프로리그=CK > 스폰),
@@ -152,24 +155,6 @@ CAT_WEIGHT = {
 }
 DEFAULT_CAT_WEIGHT = 0.6
 
-# 운영 가중치는 자동 백테스트에서 이 후보들과 함께 검증한다. 스폰 데이터가 전체의
-# 대부분이므로 전체 로그손실만 최소화하면 스폰 가중치를 높이는 쪽으로 치우친다.
-# 따라서 추천 점수는 대회·대학대전 등 중요경기 로그손실을 70%, 전체를 30% 반영한다.
-# 추천값은 관측용이며 운영 가중치를 실행 중 자동 변경하지 않는다. 랭킹이 실행마다 다른
-# 계산식으로 만들어지는 일을 막고, 충분한 기간의 결과를 확인한 뒤 CAT_WEIGHT를 바꾼다.
-BACKTEST_DAYS = 90
-BACKTEST_PROFILES = {
-    'production': CAT_WEIGHT,
-    'sponsor_045': {**CAT_WEIGHT, 'sponsored': 0.45, '': 0.45},
-    'sponsor_075': {**CAT_WEIGHT, 'sponsored': 0.75, '': 0.75},
-    'all_equal': {key: 1.0 for key in CAT_WEIGHT},
-}
-BACKTEST_ELIGIBLE_PROFILES = {'production', 'sponsor_045', 'sponsor_075'}
-IMPORTANT_CATEGORIES = {
-    'solo_event', 'college_event', 'college_war', 'college_mini',
-    'pro_league', 'team_event',
-}
-
 # 반감기는 시계열 홀드아웃으로 정했다. 티어표가 1~2달마다 갱신되니 한 번 매긴 순위가
 # 버텨야 하는 기간도 그만큼이라, 평가 지평을 30~180일로 나눠 로그손실을 재봤다
 # (컷오프 6개 평균). 지평이 무엇이든 120일이 가장 좋았다:
@@ -209,12 +194,24 @@ HALF_LIFE_DAYS = 90.0       # 개인 폼(δ) 반감기(약 3개월)
 HALF_LIFE_TIER_DAYS = 540.0  # 티어 기준선(m) 반감기(약 1.5년)
 RECENT_DAYS = 365           # 순위를 매길 때 보는 최근 기간
 MIN_RECENT_GAMES = 10       # 이 기간에 이보다 적게 뒀으면 순위에서 빼고 '기록 없음'
-# 순위 점수에서 표준오차를 몇 배 빼는가.
-# 2026-09 홀드아웃 재검증(미래 90일 동티어 경기 34,433판)과 실제 승급 직전 순위
-# 재현을 함께 봤다. 현재 순위 보존보다 데이터 적합도를 우선할 때 1.50이 가장 좋았다.
-# 미래 예측 정확도/로그손실이 개선되고, 최근 승급자는 같은 티어 상위 25%에서 더 잘
-# 포착되며, 표본이 얇은 선수가 상위권에 끼는 비율도 줄었다.
-SE_PENALTY = 1.50
+# 순위는 θ(사후 추정치) 순서로 매긴다. 예전엔 θ - 1.5·표준오차로 줄을 세웠는데,
+# 티어 안 편차 폭이 좁아서(δ 중앙값 +0.02) 표준오차 항이 순서를 사실상 정했다.
+# 합성 데이터로 재 보니 실력이 정확히 평균인 선수가 남보다 2배 많이 두면 31명 중
+# 16위 -> 7위로 올라갔다(θ 순서로는 16위 그대로). 표본이 얇은 선수가 튀는 것은
+# δ prior(SIGMA_DELTA)가 이미 0 쪽으로 당겨서 막고, 사실상 안 둔 사람은
+# MIN_RECENT_GAMES 문턱이 거른다. 표준오차는 '데이터 티어' 판정 구간에만 쓴다.
+DATA_TIER_Z = 1.50          # 데이터 티어: θ ± 이 배수×표준오차가 경계를 완전히 넘을 때만 괴리
+
+# 종족 상성. 선수 개인 실력(δ)과 별개로 전 선수 공통의 종족 간 유불리 3개를 같이 맞춘다
+# (테란→저그, 저그→프로토스, 프로토스→테란 방향의 로짓 우위. 반대 방향은 부호만 바뀐다).
+# 예전엔 종족 효과가 각자의 δ에 섞여 들어가, 상대 종족 구성이 치우친 선수의 실력이
+# 흔들렸다. 엔트리 예상승률도 이 값을 그대로 쓴다.
+# 식별 가정: 교차 종족 조합은 셋(TZ·ZP·PT)뿐이라 데이터만으로는 세 상성의 '합'만
+# 정해진다. 나머지는 δ prior가 정한다 - 즉 '같은 티어 안에서 종족별 평균 실력은 같다'고
+# 본다. 어떤 종족 선수들이 티어 안에서 평균적으로 더 강하다면 그 차이도 상성으로 읽힌다.
+RACES = ('T', 'Z', 'P')
+RACE_PAIRS = ('TZ', 'ZP', 'PT')
+LAMBDA_RACE = 1e-6          # 수치 안정용으로만 아주 약하게 묶는다
 
 # δ에 거는 prior의 폭(표준편차). 로짓 단위에서 티어 한 칸 차이가 약 0.36이고
 # (실측 1칸 차 승률 58.8%)이다. 0.4/0.5/0.65를 미래 90일 동티어 경기로 재검증했을 때
@@ -403,13 +400,44 @@ def build_pairs(rows, cats, today, players, ladders, t_pos, category_weights=Non
             order, wsum, wsum_tier, last_day)
 
 
-def fit_delta(wi, li, ww, win_tier_idx, lose_tier_idx, lam, n_players, m):
-    """티어 기준선 m을 고정한 채 티어 안 편차 δ만 맞춘다(2단 중 2단).
+def race_code(value):
+    """선수 종족을 T/Z/P 한 글자로. 모르면 빈 문자열."""
+    text = str(value or '').strip().upper()
+    if text in RACES:
+        return text
+    return {'테란': 'T', '저그': 'Z', '프로토스': 'P', '토스': 'P'}.get(str(value or '').strip(), '')
+
+
+def race_terms(node_race, wi, li):
+    """경기마다 종족 상성 파라미터 번호와 부호. 같은 종족/모르는 종족이면 부호 0.
+
+    반환: (idx, sign) - 승자 기준 로짓 차이에 sign * race[idx]를 더한다.
+    """
+    lookup = {}
+    for k, pair in enumerate(RACE_PAIRS):
+        lookup[(pair[0], pair[1])] = (k, 1.0)
+        lookup[(pair[1], pair[0])] = (k, -1.0)
+    wr = [node_race[i] for i in wi]
+    lr = [node_race[j] for j in li]
+    idx = np.zeros(len(wi), dtype=np.int64)
+    sign = np.zeros(len(wi), dtype=np.float64)
+    for n, key in enumerate(zip(wr, lr)):
+        hit = lookup.get(key)
+        if hit:
+            idx[n], sign[n] = hit
+    return idx, sign
+
+
+def fit_delta(wi, li, ww, win_tier_idx, lose_tier_idx, lam, n_players, m,
+              race=None, race_idx=None, race_sign=None):
+    """티어 기준선 m(과 종족 상성)을 고정한 채 티어 안 편차 δ만 맞춘다(2단 중 2단).
 
     m은 긴 창에서 이미 정해졌으므로 여기서는 건드리지 않는다. 같은 볼록 문제에서
     m 블록만 빠진 꼴이라 수렴은 더 쉽다.
     """
     base_diff = m[win_tier_idx] - m[lose_tier_idx]
+    if race is not None:
+        base_diff = base_diff + race_sign * race[race_idx]
 
     def fun_grad(delta):
         d = np.clip(base_diff + delta[wi] - delta[li], -60, 60)
@@ -428,45 +456,57 @@ def fit_delta(wi, li, ww, win_tier_idx, lose_tier_idx, lam, n_players, m):
 
 
 def solve_two_stage(wi, li, ww, ww_tier, win_tier_idx, lose_tier_idx,
-                    current_tier_idx, lam, n, n_tiers, wsum, wsum_tier):
-    """1단으로 티어 간격 m(긴 창), 2단으로 개인 폼 δ(짧은 창)를 맞춘다.
+                    current_tier_idx, lam, n, n_tiers, wsum, wsum_tier, node_race=None):
+    """1단으로 티어 간격 m과 종족 상성(긴 창), 2단으로 개인 폼 δ(짧은 창)를 맞춘다.
 
-    반환: (theta, score, keep) - keep은 짧은 창 기준으로 살아남은 쌍 마스크다.
+    [2단은 '지금 티어' 기준선으로 맞춘다 - 승급 직후 과대평가를 막기 위해]
+    1단(m)은 경기 당시 티어로 놓아야 승급 전 성적이 새 티어 기준선을 끌어올리지 않는다.
+    그런데 2단까지 당시 티어로 놓으면, 5티어에서 잘해서 번 δ가 승급 뒤 4티어 기준선
+    위에 그대로 얹혀 '승급하는 날 실력이 한 칸 뛰었다'고 가정하는 셈이 된다.
+    합성 데이터(1년 내내 4티어 평균 실력, 20일 전 승급)로 재 보니 θ가 +0.28로짓
+    (티어 한 칸의 78%) 부풀어 31명 중 5위에 섰다. 2단을 지금 티어로 맞추면
+    오차가 +0.04로 줄고 16위 근처로 돌아온다. δ는 90일 창의 '지금 폼'이라, 그 창
+    안에서는 실력이 일정하다고 보는 편이 맞다.
+
+    반환: (theta, standard_error, keep, m, race)
+      keep은 짧은 창 기준으로 살아남은 쌍 마스크, race는 RACE_PAIRS 순서의 로짓 우위.
     """
+    if node_race is None:
+        node_race = [''] * n
+    race_idx, race_sign = race_terms(node_race, wi, li)
     unranked = lam < 1.0 / SIGMA_DELTA ** 2      # prior가 넓으면 미분류
     # 판 적은 미분류는 두 단 모두에서 다리로 쓰지 않는다. 다만 문턱을 각자의 창으로
     # 재야 한다 - 긴 창에서는 충분히 둔 사람이 짧은 창에서만 얇아지는 일이 흔하다.
     thin_t = unranked & (wsum_tier < MIN_UNRANKED_GAMES)
     keep_t = ~(thin_t[wi] | thin_t[li])
-    m, _ = fit(
+    m, _, race = fit(
         wi[keep_t], li[keep_t], ww_tier[keep_t],
-        win_tier_idx[keep_t], lose_tier_idx[keep_t], lam, n, n_tiers)
+        win_tier_idx[keep_t], lose_tier_idx[keep_t], lam, n, n_tiers,
+        race_idx=race_idx[keep_t], race_sign=race_sign[keep_t])
 
     thin = unranked & (wsum < MIN_UNRANKED_GAMES)
     keep = ~(thin[wi] | thin[li])
+    cur_w = current_tier_idx[wi]
+    cur_l = current_tier_idx[li]
     delta = fit_delta(
-        wi[keep], li[keep], ww[keep], win_tier_idx[keep], lose_tier_idx[keep], lam, n, m)
+        wi[keep], li[keep], ww[keep], cur_w[keep], cur_l[keep], lam, n, m,
+        race=race, race_idx=race_idx[keep], race_sign=race_sign[keep])
     theta = m[current_tier_idx] + delta
-    match_diff = (
-        m[win_tier_idx[keep]] + delta[wi[keep]]
-        - m[lose_tier_idx[keep]] - delta[li[keep]]
-    )
-    score, standard_error = ranking_scores(
-        theta, wi[keep], li[keep], ww[keep], lam, match_diff=match_diff)
-    return theta, score, standard_error, keep, m
+    match_diff = (theta[wi[keep]] - theta[li[keep]]
+                  + race_sign[keep] * race[race_idx[keep]])
+    standard_error = standard_errors(lam, wi[keep], li[keep], ww[keep], match_diff)
+    return theta, standard_error, keep, m, race
 
 
-def ranking_scores(theta, wi, li, ww, lam, match_diff=None):
-    """현재 순위와 월별 그래프가 공유하는 최종 레이팅(불확실성 차감)."""
-    differences = theta[wi] - theta[li] if match_diff is None else match_diff
-    d = np.clip(differences, -60, 60)
+def standard_errors(lam, wi, li, ww, match_diff):
+    """선수별 표준오차 = 1 / sqrt(prior 정밀도 + Σ w·p(1-p))."""
+    d = np.clip(match_diff, -60, 60)
     p_hat = 1.0 / (1.0 + np.exp(-d))
     info = ww * p_hat * (1.0 - p_hat)
     prec = lam.copy()
     np.add.at(prec, wi, info)
     np.add.at(prec, li, info)
-    standard_error = 1.0 / np.sqrt(prec)
-    return theta - SE_PENALTY * standard_error, standard_error
+    return 1.0 / np.sqrt(prec)
 
 
 def monotone_tier_levels(values, weights=None):
@@ -493,8 +533,8 @@ def monotone_tier_levels(values, weights=None):
 def infer_data_tier(current_index, theta, standard_error, levels, max_steps=2):
     """불확실성 구간이 인접 티어 경계를 완전히 넘을 때만 괴리로 판정한다."""
     idx = int(current_index)
-    lower = float(theta) - SE_PENALTY * float(standard_error)
-    upper = float(theta) + SE_PENALTY * float(standard_error)
+    lower = float(theta) - DATA_TIER_Z * float(standard_error)
+    upper = float(theta) + DATA_TIER_Z * float(standard_error)
     for _ in range(max_steps):
         if idx > 0 and lower > (levels[idx - 1] + levels[idx]) / 2.0:
             idx -= 1
@@ -531,7 +571,7 @@ def level_gradient_to_parameters(level_gradient, n_tiers):
 
 
 def solve_at(rows, cats, as_of, players, t_pos, n_tiers, ladders):
-    """as_of 시점까지의 경기만으로 한 번 맞춘다. 반환: (선수id -> 점수) 사전.
+    """as_of 시점까지의 경기만으로 한 번 맞춘다. 반환: (선수id -> 레이팅 θ) 사전.
 
     최근 가중치의 기준일도 as_of로 잡고, 티어 기준선도 그 시점의 티어로 붙인다 -
     그래야 '그때 기준의 실력'이 나온다.
@@ -546,9 +586,10 @@ def solve_at(rows, cats, as_of, players, t_pos, n_tiers, ladders):
     tier_idx = np.fromiter((t_pos[t] for t in tiers_then), dtype=np.int64, count=n)
     unranked = tier_idx == t_pos[UNRANKED]
     lam = np.where(unranked, 1.0 / SIGMA_UNRANKED ** 2, 1.0 / SIGMA_DELTA ** 2)
-    _theta, score, _se, _keep, _m = solve_two_stage(
+    node_race = [race_code((players.get(pid) or {}).get('r')) for pid in order]
+    theta, _se, _keep, _m, _race = solve_two_stage(
         wi, li, ww, ww_tier, win_tier_idx, lose_tier_idx,
-        tier_idx, lam, n, n_tiers, wsum, wsum_tier)
+        tier_idx, lam, n, n_tiers, wsum, wsum_tier, node_race)
 
     cutoff = (as_of - dt.timedelta(days=RECENT_DAYS)).isoformat()
     out = {}
@@ -557,7 +598,9 @@ def solve_at(rows, cats, as_of, players, t_pos, n_tiers, ladders):
             continue
         if last_day.get(k, '') < cutoff:
             continue
-        out[pid] = round(float(score[k]) * SCORE_SCALE + SCORE_BASE, 1)
+        # 그래프는 실력 추정치 θ를 그린다. 예전 θ-1.5·표준오차는 쉬는 동안 표준오차가
+        # 커져 실력은 그대로인데 선이 떨어져 보였다.
+        out[pid] = round(float(theta[k]) * SCORE_SCALE + SCORE_BASE, 1)
     return out
 
 
@@ -623,24 +666,35 @@ def build_history(rows, cats, players, t_pos, n_tiers, last_day, ladders,
     return keys, out
 
 
-def fit(wi, li, ww, win_tier_idx, lose_tier_idx, lam, n_players, n_tiers):
+def fit(wi, li, ww, win_tier_idx, lose_tier_idx, lam, n_players, n_tiers,
+        race_idx=None, race_sign=None):
     """θ = m[티어] + δ 를 가중 로지스틱 최대가능도로 맞춘다(볼록 문제).
 
-    P(i가 j를 이김) = sigmoid(θ_i - θ_j)
-    최소화: -Σ w·log sigmoid(θ_i - θ_j) + (1/2)Σ λ_i·δ_i² + (λ_m/2)Σm²
+    P(i가 j를 이김) = sigmoid(θ_i - θ_j + 종족 상성)
+    최소화: -Σ w·log sigmoid(d) + (1/2)Σ λ_i·δ_i² + (λ_m/2)Σm² + (λ_r/2)Σr²
 
     lam은 선수별 prior 정밀도(1/σ²)다 - 티어가 있는 사람은 좁게, 미분류는 넓게 준다.
+    race_idx/race_sign을 주면 종족 상성 3개(RACE_PAIRS)를 같이 맞춘다.
+    반환: (m, delta, race)
     """
+    n_race = len(RACE_PAIRS)
+    if race_idx is None:
+        race_idx = np.zeros(len(wi), dtype=np.int64)
+        race_sign = np.zeros(len(wi), dtype=np.float64)
+
     def fun_grad(x):
         delta = x[:n_players]
-        m = tier_parameters_to_levels(x[n_players:], n_tiers)
+        m = tier_parameters_to_levels(x[n_players:n_players + n_tiers], n_tiers)
+        race = x[n_players + n_tiers:]
         d = np.clip(
-            m[win_tier_idx] + delta[wi] - m[lose_tier_idx] - delta[li],
+            m[win_tier_idx] + delta[wi] - m[lose_tier_idx] - delta[li]
+            + race_sign * race[race_idx],
             -60, 60)
         # -log sigmoid(d) = log(1 + e^-d). logaddexp로 넘침 없이 계산한다.
         f = float(np.sum(ww * np.logaddexp(0.0, -d))
                   + 0.5 * np.sum(lam * delta ** 2)
-                  + 0.5 * LAMBDA_M * np.sum(m ** 2))
+                  + 0.5 * LAMBDA_M * np.sum(m ** 2)
+                  + 0.5 * LAMBDA_RACE * np.sum(race ** 2))
         # 1 - sigmoid(d) = sigmoid(-d)
         resid = ww / (1.0 + np.exp(d))
         g_theta = np.zeros(n_players)
@@ -651,15 +705,17 @@ def fit(wi, li, ww, win_tier_idx, lose_tier_idx, lam, n_players, n_tiers):
             + np.bincount(lose_tier_idx, weights=resid, minlength=n_tiers)
             + LAMBDA_M * m
         )
+        g_race = np.bincount(race_idx, weights=-resid * race_sign, minlength=n_race) + LAMBDA_RACE * race
         return f, np.concatenate([
             g_theta + lam * delta,
             level_gradient_to_parameters(g_m, n_tiers),
+            g_race,
         ])
 
     # 첫 기준점과 미분류 기준점은 자유롭고, 실제 티어 사이 간격만 0 이상으로 묶는다.
-    x0 = np.zeros(n_players + n_tiers)
+    x0 = np.zeros(n_players + n_tiers + n_race)
     x0[n_players + 1:n_players + len(TIER_ORDER)] = 0.1
-    bounds = [(None, None)] * (n_players + n_tiers)
+    bounds = [(None, None)] * (n_players + n_tiers + n_race)
     for idx in range(1, len(TIER_ORDER)):
         bounds[n_players + idx] = (MIN_TIER_GAP, None)
     res = minimize(fun_grad, x0, jac=True, method='L-BFGS-B', bounds=bounds,
@@ -667,116 +723,12 @@ def fit(wi, li, ww, win_tier_idx, lose_tier_idx, lam, n_players, n_tiers):
     if not res.success:
         print(f'   ⚠️ 최적화가 수렴했다고 보고하지 않았습니다: {res.message}')
     delta = res.x[:n_players].copy()
-    m = tier_parameters_to_levels(res.x[n_players:], n_tiers)
+    m = tier_parameters_to_levels(res.x[n_players:n_players + n_tiers], n_tiers)
+    race = res.x[n_players + n_tiers:].copy()
     # θ는 전체를 같이 밀어도 똑같다(차이만 의미가 있다). 티어 기준선의 평균을 0에 묶어
     # 값이 매번 다른 자리에 서지 않게 한다(미분류는 실력 구간이 아니라 평균에서 뺀다).
     m -= m[:len(TIER_ORDER)].mean()
-    return m, delta
-
-
-def _metric_result(values):
-    count, log_loss, brier, correct = values
-    if not count:
-        return {'games': 0, 'logLoss': None, 'brier': None, 'accuracy': None}
-    return {
-        'games': int(count),
-        'logLoss': round(log_loss / count, 6),
-        'brier': round(brier / count, 6),
-        'accuracy': round(correct / count, 6),
-    }
-
-
-def run_backtest(rows, cats, players, ladders, t_pos, n_tiers, today):
-    """최근 90일을 숨기고 가중치 후보의 미래 예측력을 자동 검증한다.
-
-    스폰 표본이 압도적이므로 추천 점수는 중요경기 70%, 전체 30%로 계산한다.
-    결과는 관측용이며 실제 운영 가중치는 자동 변경하지 않는다.
-    """
-    cutoff = today - dt.timedelta(days=BACKTEST_DAYS - 1)
-    train_as_of = cutoff - dt.timedelta(days=1)
-    train_rows = [r for r in rows if len(r) >= 6 and str(r[1])[:10] <= train_as_of.isoformat()]
-    test_rows = [r for r in rows if len(r) >= 6 and cutoff.isoformat() <= str(r[1])[:10] <= today.isoformat()]
-    if len(train_rows) < 100 or len(test_rows) < 100:
-        return {
-            'status': 'insufficient_data', 'days': BACKTEST_DAYS,
-            'trainGames': len(train_rows), 'testGames': len(test_rows),
-        }
-
-    results = {}
-    for profile_name, profile_weights in BACKTEST_PROFILES.items():
-        (wi, li, ww, ww_tier, win_tier_idx, lose_tier_idx,
-         order, wsum, wsum_tier, _last_day) = build_pairs(
-            train_rows, cats, train_as_of, players, ladders, t_pos,
-            category_weights=profile_weights)
-        if not len(ww):
-            continue
-        current_tier_idx = np.fromiter(
-            (t_pos[tier_at(pid, train_as_of, ladders, players)] for pid in order),
-            dtype=np.int64, count=len(order))
-        unranked = current_tier_idx == t_pos[UNRANKED]
-        lam = np.where(unranked, 1.0 / SIGMA_UNRANKED ** 2, 1.0 / SIGMA_DELTA ** 2)
-        theta, _score, _se, _keep, m = solve_two_stage(
-            wi, li, ww, ww_tier, win_tier_idx, lose_tier_idx,
-            current_tier_idx, lam, len(order), n_tiers, wsum, wsum_tier)
-        delta = theta - m[current_tier_idx]
-        pos = {pid: idx for idx, pid in enumerate(order)}
-        buckets = {'overall': [0, 0.0, 0.0, 0], 'important': [0, 0.0, 0.0, 0]}
-        by_category = {}
-        for r in test_rows:
-            _, date, winner, loser, _map, cat = r[:6]
-            winner, loser = str(winner), str(loser)
-            if winner not in pos or loser not in pos:
-                continue
-            try:
-                day = dt.date.fromisoformat(str(date)[:10])
-            except ValueError:
-                continue
-            category = cats[cat] if isinstance(cat, int) and 0 <= cat < len(cats) else ''
-            win_level = t_pos[tier_at(winner, day, ladders, players)]
-            lose_level = t_pos[tier_at(loser, day, ladders, players)]
-            d = m[win_level] + delta[pos[winner]] - m[lose_level] - delta[pos[loser]]
-            probability = 1.0 / (1.0 + math.exp(-max(min(float(d), 60.0), -60.0)))
-            probability = min(max(probability, 1e-12), 1.0 - 1e-12)
-            targets = [buckets['overall']]
-            if category in IMPORTANT_CATEGORIES:
-                targets.append(buckets['important'])
-            if profile_name == 'production':
-                targets.append(by_category.setdefault(category or 'other', [0, 0.0, 0.0, 0]))
-            for target in targets:
-                target[0] += 1
-                target[1] += -math.log(probability)
-                target[2] += (1.0 - probability) ** 2
-                target[3] += int(probability >= 0.5)
-
-        overall = _metric_result(buckets['overall'])
-        important = _metric_result(buckets['important'])
-        if overall['logLoss'] is None or important['logLoss'] is None:
-            continue
-        results[profile_name] = {
-            'weights': {key or 'other': value for key, value in profile_weights.items()},
-            'overall': overall,
-            'important': important,
-            'priorityScore': round(0.3 * overall['logLoss'] + 0.7 * important['logLoss'], 6),
-        }
-        if profile_name == 'production':
-            results[profile_name]['byCategory'] = {
-                key: _metric_result(value) for key, value in sorted(by_category.items())
-            }
-
-    eligible = [key for key in results if key in BACKTEST_ELIGIBLE_PROFILES]
-    recommended = min(eligible, key=lambda key: results[key]['priorityScore']) if eligible else None
-    return {
-        'status': 'ok' if results else 'insufficient_data',
-        'days': BACKTEST_DAYS,
-        'cutoff': cutoff.isoformat(),
-        'trainGames': len(train_rows),
-        'testGames': len(test_rows),
-        'selectionRule': 'important_log_loss_70_overall_30',
-        'deployedProfile': 'production',
-        'recommendedProfile': recommended,
-        'diagnosticOnlyProfiles': ['all_equal'],
-        'profiles': results,
-    }
+    return m, delta, race
 
 
 def main():
@@ -827,27 +779,20 @@ def main():
 
     # 1단 티어 간격(긴 창) -> 2단 개인 폼(짧은 창). 표준오차는 짧은 창 기준이다 -
     # '지금 이 선수를 얼마나 아는가'를 재는 값이라 폼과 같은 창이어야 한다.
-    theta, score, standard_error, keep, m = solve_two_stage(
+    node_race = [race_code((players.get(pid) or {}).get('r')) for pid in order]
+    theta, standard_error, keep, m, race = solve_two_stage(
         wi, li, ww, ww_tier, win_tier_idx, lose_tier_idx,
-        tier_idx, lam, n, len(tiers), wsum, wsum_tier)
+        tier_idx, lam, n, len(tiers), wsum, wsum_tier, node_race)
     dropped_pairs = int((~keep).sum())
     wi, li, ww = wi[keep], li[keep], ww[keep]
-
-    backtest = run_backtest(rows, cats, players, ladders, t_pos, len(tiers), today)
-    if backtest.get('status') == 'ok':
-        prod = backtest['profiles']['production']
-        print(f"   자동 백테스트 {backtest['cutoff']}~{today}: "
-              f"전체 logloss {prod['overall']['logLoss']:.4f} · "
-              f"중요경기 {prod['important']['logLoss']:.4f} · "
-              f"추천 {backtest['recommendedProfile']}")
-    else:
-        print('   ⚠️ 자동 백테스트 표본이 부족해 지표를 계산하지 못했습니다.')
+    # 맞춘 경기가 한 판이라도 남은 선수(판 적은 미분류는 빠졌다)
+    fitted = np.bincount(wi, minlength=n) + np.bincount(li, minlength=n) > 0
 
     # 최근 RECENT_DAYS 안에 실제로 몇 판 뒀는지(가중치 없는 날것). 눈에 보이는 문턱이라
     # 가중치가 아니라 판 수 그대로 센다.
     cutoff_day = (today - dt.timedelta(days=RECENT_DAYS)).isoformat()
     history_current_scores = {
-        pid: round(float(score[k]) * SCORE_SCALE + SCORE_BASE, 1)
+        pid: round(float(theta[k]) * SCORE_SCALE + SCORE_BASE, 1)
         for k, pid in enumerate(order)
         if players.get(pid) is not None
         and tier_of(players.get(pid)) != UNRANKED
@@ -862,7 +807,7 @@ def main():
 
     # 순위 대상: 티어가 매겨져 있고(=지금 티어표에 있고), 최근 RECENT_DAYS 안에
     # MIN_RECENT_GAMES판 이상 둔 선수. 휴면인 사람은 맞출 때는 상대로 쓰지만 순위에는 안 올린다.
-    ranked = {}          # 티어 -> [(순위점수, 선수id)]
+    ranked = {}          # 티어 -> [(θ, 선수id)]
     skipped_recent = skipped_thin = skipped_dormant = 0
     for k, pid in enumerate(order):
         entry = players.get(pid)
@@ -881,11 +826,11 @@ def main():
         if n_recent < MIN_RECENT_GAMES:
             skipped_thin += 1
             continue
-        ranked.setdefault(t, []).append((score[k], pid))
-        # 어드민에 같은 적합 결과의 실력 추정치와 보수적 순위 점수를 함께 표시한다.
-        # 정렬에는 반올림 전 score를 그대로 쓴다.
+        ranked.setdefault(t, []).append((theta[k], pid))
+        # 순위 기준이 θ라 rawRating과 rating은 같은 값이다(기존 소비자 호환용으로 둘 다 둔다).
+        # 정렬에는 반올림 전 θ를 그대로 쓴다.
         entry['rawRating'] = round(float(theta[k]) * SCORE_SCALE + SCORE_BASE, 1)
-        entry['rating'] = round(float(score[k]) * SCORE_SCALE + SCORE_BASE, 1)
+        entry['rating'] = entry['rawRating']
 
     tier_sizes = {}
     for t, lst in ranked.items():
@@ -950,17 +895,31 @@ def main():
             entry.pop('dataTier', None)
             entry.pop('tierGap', None)
 
+    # 순위와 상관없이 맞춘 모든 선수의 θ와 표준오차(Elo 점수 단위). 엔트리 예상승률이
+    # 순위 밖 선수(10판 미만, 미분류)에게도 티어 평균 대신 실제 추정치를 쓰게 한다.
+    for k, pid in enumerate(order):
+        entry = players.get(pid)
+        if entry is None:
+            continue
+        if fitted[k]:
+            entry['theta'] = round(float(theta[k]) * SCORE_SCALE + SCORE_BASE, 1)
+            entry['thetaSE'] = round(float(standard_error[k]) * SCORE_SCALE, 1)
+        else:
+            entry.pop('theta', None)
+            entry.pop('thetaSE', None)
+
     index['ranking'] = {
         'asOf': today.isoformat(),
         'halfLifeDays': int(HALF_LIFE_DAYS),
         'halfLifeTierDays': int(HALF_LIFE_TIER_DAYS),
         'recentDays': RECENT_DAYS,
         'minRecentGames': MIN_RECENT_GAMES,
-        'backtest': backtest,
         # 티어별 순위 인원. 뱃지의 '3위/16명'에서 분모로 쓴다.
         'tierCounts': {t: tier_sizes[t] for t in TIER_ORDER if t in tier_sizes},
         # 티어 기준선(로짓). 화면에는 안 쓰지만 간격이 뒤집혔는지 확인할 때 본다.
         'tierLevels': {t: round(float(m[t_pos[t]]) * SCORE_SCALE + SCORE_BASE, 1) for t in TIER_ORDER},
+        # 종족 상성(Elo 점수 단위). 'TZ'가 +10이면 테란이 저그에게 10점 우위, 반대는 -10.
+        'raceMatchup': {pair: round(float(race[k]) * SCORE_SCALE, 1) for k, pair in enumerate(RACE_PAIRS)},
     }
 
     total = sum(tier_sizes.values())
@@ -970,6 +929,8 @@ def main():
     print(f'   기준일 {today} · 반감기 폼 {int(HALF_LIFE_DAYS)}일 / 티어 {int(HALF_LIFE_TIER_DAYS)}일'
           f' · 쌍 {len(ww):,}개'
           f' (판 적은 미분류 제외 {dropped_pairs:,}쌍)')
+    print('   종족 상성(Elo 점수): ' + ' · '.join(
+        f'{pair[0]}→{pair[1]} {race[k] * SCORE_SCALE:+.1f}' for k, pair in enumerate(RACE_PAIRS)))
     print('   티어 기준선(높을수록 강함):')
     for t in TIER_ORDER:
         if t in tier_sizes:
