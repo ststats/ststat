@@ -12,7 +12,8 @@ import tempfile
 
 # v4: 순위·이력이 θ-1.5SE에서 θ로 바뀌고, δ를 현재 티어로 맞추며 종족 상성이 들어갔다.
 # 이전 버전으로 계산한 마감 월 캐시는 값의 뜻이 달라 재사용하면 안 된다.
-RANKING_HISTORY_CACHE_VERSION = 'ranking-2026-09-24-v4'
+# v5: 형식 가중치 변경(미니 0.8 · 리그·CK 0.7).
+RANKING_HISTORY_CACHE_VERSION = 'ranking-2026-09-24-v5'
 
 
 def history_cache_metadata(source: dict) -> dict:
