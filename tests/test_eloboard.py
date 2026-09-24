@@ -35,14 +35,15 @@ def _row(match_id, played_on, winner=1, loser=2):
     }
 
 
-def test_rescan_cutoff_reaches_previous_month_start():
+def test_rescan_cutoff_covers_this_month_and_early_days_of_last_month():
     import datetime as dt
     from jobs.sync_eloboard import rescan_cutoff
-    assert rescan_cutoff(dt.date(2026, 9, 24)) == "2026-08-01"
-    assert rescan_cutoff(dt.date(2026, 1, 2)) == "2025-12-01"
-    assert rescan_cutoff(dt.date(2026, 9, 24), rescan_months=1) == "2026-09-01"
-    # 달이 막 바뀌어도 최근 3일은 늘 다시 읽는다
-    assert rescan_cutoff(dt.date(2026, 9, 1), rescan_months=1) == "2026-08-29"
+    assert rescan_cutoff(dt.date(2026, 9, 24)) == "2026-09-01"      # 평소: 이번 달만
+    assert rescan_cutoff(dt.date(2026, 9, 7)) == "2026-08-01"       # 월초 7일까지: 지난달부터
+    assert rescan_cutoff(dt.date(2026, 9, 8)) == "2026-09-01"
+    assert rescan_cutoff(dt.date(2026, 1, 3)) == "2025-12-01"       # 해 넘김
+    # 이번 달만 읽는 설정이어도 최근 3일은 늘 다시 읽는다
+    assert rescan_cutoff(dt.date(2026, 9, 2), prev_month_days=0) == "2026-08-30"
 
 
 def test_sync_rereads_old_ids_restored_within_this_month(monkeypatch):
@@ -54,7 +55,7 @@ def test_sync_rereads_old_ids_restored_within_this_month(monkeypatch):
         _row(105, "2026-09-23"),
         _row(104, "2026-09-22"),
         _row(90, "2026-09-10", winner=3, loser=4),   # 예전 수집 때 없었다가 복구된 경기
-        _row(80, "2026-07-20"),                       # 지난달보다 이전 - 다시 읽지 않는다
+        _row(80, "2026-08-20"),                       # 이번 달 이전(월초 아님) - 다시 읽지 않는다
     ]]
     monkeypatch.setattr(job, "fetch_page", lambda offset, delay=0: pages[offset // job.PAGE_STEP] if offset // job.PAGE_STEP < len(pages) else [])
     monkeypatch.setattr(job, "DEFAULT_DELAY", 0)
@@ -74,4 +75,4 @@ def test_sync_rereads_old_ids_restored_within_this_month(monkeypatch):
 
     result = job.run()
     assert saved["ids"] == [90, 104, 105]
-    assert result.metadata["rescan_from"] == "2026-08-01"
+    assert result.metadata["rescan_from"] == "2026-09-01"
