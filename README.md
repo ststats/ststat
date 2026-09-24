@@ -39,3 +39,13 @@ python scripts/run_job.py audit_match_rounds
 `migrations/001_*.sql`부터 번호 순서대로 같은 Supabase 프로젝트에 적용합니다. 웹 공개 뷰와 권한도 이 저장소의 migration에서만 관리합니다.
 
 현재 일별 통계 게시 코드는 `008_atomic_daily_publish.sql`의 RPC를 요구하며, StarUniv/Synergy 공개 조회는 `009_public_web_views.sql`, 어드민 통합 현황은 `010_admin_dashboard.sql`을 요구합니다. 티어랭킹 v4(모든 선수 레이팅·종족 상성 공개)는 `011_player_ratings_race_matchup.sql`을 요구하므로, 이 마이그레이션을 먼저 적용한 뒤 코드를 배포합니다.
+
+## 운영 메모
+
+- **EloBoard 요청 간격은 최소 2초**(운영자 요청). `ELOBOARD_DELAY`는 늘릴 수만 있고, 2초 미만이나 잘못된 값은
+  `collectors/eloboard.py`의 `MIN_DELAY`(2초)로 올라갑니다.
+- 정기 수집은 이번 달 1일(매월 1~7일은 지난달 1일)부터 다시 읽습니다. 사라진 경기 삭제는 그 기간 안에서만,
+  기간 경기 수의 2%(최소 50건)까지만 하고 넘으면 지우지 않습니다.
+- `backfill-eloboard.yml`: 누락 복구용으로 EloBoard 전체를 다시 읽어 upsert합니다(삭제 없음, 1시간 반 안팎).
+- `restore-eloboard-json.yml`: staruniv에 남아 있던 2026-09-22 경기 백업 JSON을 다시 넣는 일회용 복구 작업입니다.
+- 티어 랭킹 모델 설명: staruniv 저장소 `notes/TIER_RANKING_MODEL_2026-09-23.md`, 계산 코드는 `processors/staruniv_ranking.py`.
