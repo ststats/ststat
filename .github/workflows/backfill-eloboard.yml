@@ -1,0 +1,34 @@
+name: Backfill EloBoard matches
+
+# 누락·삭제된 EloBoard 경기를 복구할 때 수동으로 한 번 돌린다.
+# 이미 받은 경기까지 처음부터 끝까지 다시 읽어 upsert하고, 아무것도 지우지 않는다.
+# 전체 약 35만 경기(≈1,900페이지)라 30~60분 걸린다.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ststat-main-pipeline
+  cancel-in-progress: false
+
+env:
+  SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+  SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+  STSTAT_ENV: production
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Re-read all EloBoard matches
+        env:
+          ELOBOARD_BACKFILL: "1"
+          ELOBOARD_DELAY: "0.5"
+        run: python scripts/run_job.py sync_eloboard

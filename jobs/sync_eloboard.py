@@ -10,7 +10,7 @@ from models.sync_job import JobResult
 from repositories.eloboard import (
     delete_match_ids,
     get_latest_match_id,
-    load_match_ids_from,
+    load_match_ids_between,
     stage_unknown_elo_candidates,
     upsert_dimensions,
     upsert_matches,
@@ -37,12 +37,19 @@ def rescan_cutoff(today: dt.date, overlap_days: int = OVERLAP_DAYS,
     return min(today - dt.timedelta(days=overlap_days), month_start).isoformat()
 MAX_PAGES = int(os.getenv("ELOBOARD_MAX_PAGES", "4000"))
 MIN_VALID_RATIO = 0.95
+# 전체 다시 받기: 1이면 이미 받은 경기도 처음부터 끝까지 다시 읽어 upsert하고, 지우지 않는다.
+# 누락·삭제된 경기를 복구할 때 한 번만 쓴다(.github/workflows/backfill-eloboard.yml).
+FULL_BACKFILL = os.getenv("ELOBOARD_BACKFILL", "") == "1"
+# 한 번에 이만큼보다 많이(훑은 범위 경기의 비율) 사라졌다고 나오면 지우지 않는다.
+# EloBoard가 실제로 경기를 지우는 건 드물다 - 대량 삭제는 수집 쪽 착오일 가능성이 크다.
+MAX_DELETE_RATIO = float(os.getenv("ELOBOARD_MAX_DELETE_RATIO", "0.02"))
+MAX_DELETE_MIN = int(os.getenv("ELOBOARD_MAX_DELETE_MIN", "50"))
 
 
 def run() -> JobResult:
     stop_at = get_latest_match_id()
     today_kst = dt.datetime.now(KST).date()
-    cutoff = rescan_cutoff(today_kst) if stop_at else ""
+    cutoff = rescan_cutoff(today_kst) if stop_at and not FULL_BACKFILL else ""
 
     parsed: dict[int, EloMatch] = {}
     seen_ids: set[int] = set()
@@ -118,11 +125,21 @@ def run() -> JobResult:
     upserted = upsert_matches(matches)
     candidates = stage_unknown_elo_candidates(matches)
 
+    # EloBoard에서 사라진 경기 지우기. 이번에 끝까지 훑은 '날짜 범위'(cutoff ~ 오늘) 안에서만
+    # 판정한다. ID 범위(min_seen 이상)로 고르면 날짜 순서 목록에서 훑지 않은 옛 경기까지
+    # 지운다. 전체 다시 받기 때와 삭제 후보가 비정상적으로 많을 때는 지우지 않는다.
     deleted = 0
-    if min_seen is not None:
-        db_ids = load_match_ids_from(min_seen)
-        gone = db_ids - seen_ids
-        deleted = delete_match_ids(gone)
+    delete_skipped = None
+    if FULL_BACKFILL:
+        delete_skipped = "full_backfill"
+    elif cutoff:
+        window_ids = load_match_ids_between(cutoff, today_kst.isoformat())
+        gone = window_ids - seen_ids
+        limit = max(MAX_DELETE_MIN, int(len(window_ids) * MAX_DELETE_RATIO))
+        if len(gone) > limit:
+            delete_skipped = f"too_many:{len(gone)}>{limit}"
+        else:
+            deleted = delete_match_ids(gone)
 
     return JobResult(
         records_read=raw_count,
@@ -138,6 +155,8 @@ def run() -> JobResult:
             "rescan_from": cutoff,
             "matches_upserted": upserted,
             "matches_deleted": deleted,
+            "delete_skipped": delete_skipped,
+            "full_backfill": FULL_BACKFILL,
             "candidate_players_staged": candidates,
             "players_upserted": dimensions["players"],
             "maps_upserted": dimensions["maps"],

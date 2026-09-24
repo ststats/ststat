@@ -111,6 +111,36 @@ def load_match_ids_from(min_id: int) -> set[int]:
     return out
 
 
+def load_match_ids_between(start_date: str, end_date: str) -> set[int]:
+    """경기 날짜가 [start_date, end_date]인 저장된 경기 ID.
+
+    '사라진 경기' 판정은 이번에 실제로 훑은 날짜 범위 안에서만 해야 한다. EloBoard는
+    날짜 순서로 주고 ID는 날짜와 따로 놀아서, ID 범위로 고르면 훑지 않은 날짜의
+    경기까지 '안 보였다'며 지우게 된다(2026-09-24 약 9.4만 건 삭제 사고).
+    """
+    db = get_supabase()
+    out: set[int] = set()
+    start = 0
+    page = 1000
+    while True:
+        rows = (
+            db.table("elo_matches")
+            .select("elo_match_id")
+            .gte("match_date", start_date)
+            .lte("match_date", end_date)
+            .order("elo_match_id")
+            .range(start, start + page - 1)
+            .execute()
+            .data
+            or []
+        )
+        out.update(int(r["elo_match_id"]) for r in rows)
+        if len(rows) < page:
+            break
+        start += page
+    return out
+
+
 def delete_match_ids(ids: set[int]) -> int:
     if not ids:
         return 0
