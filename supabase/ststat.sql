@@ -114,9 +114,14 @@ create index if not exists tier_member_candidates_status_idx
 
 alter table public.tier_member_candidates enable row level security;
 
--- Internal pipeline table. Browser clients do not need access.
+-- 수집은 ststat(service_role)이 하고, 어드민은 '신규 인원' 화면에서 보고 추가·무시만 한다.
 revoke all on table public.tier_member_candidates from anon, authenticated;
 grant select, insert, update, delete on table public.tier_member_candidates to service_role;
+grant select, update, delete on table public.tier_member_candidates to authenticated;
+drop policy if exists tier_member_candidates_admin on public.tier_member_candidates;
+create policy tier_member_candidates_admin on public.tier_member_candidates
+  for all to authenticated
+  using ((select public.is_admin())) with check ((select public.is_admin()));
 
 
 -- ############################################################################
