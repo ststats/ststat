@@ -1,0 +1,23 @@
+name: Report recent jobs
+
+# 최근 작업 결과(복구·재계산·삭제 백업 등)를 로그로 출력한다. DB는 읽기만 한다.
+on:
+  workflow_dispatch:
+
+env:
+  SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+  SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python scripts/report_jobs.py
