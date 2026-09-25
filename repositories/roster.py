@@ -6,10 +6,7 @@ from models.roster import ExistingRosterMember, RosterCandidate
 from repositories.supabase import get_supabase
 
 
-# Part 2 ownership rule:
-# Existing tier_members rows: ststat may update ONLY the EloBoard source name (`name`).
-# All admin-managed fields remain untouched.
-AUTO_OWNED_EXISTING_COLUMNS = {"name"}
+# tier_members는 읽기만 한다. 선수 정보 수정은 어드민·티어표 갱신에서만 한다.
 
 
 def candidate_id(elo_id, soop_id=None) -> str:
@@ -78,23 +75,6 @@ def load_pending_ids() -> set[str]:
         for row in rows
         if str(row.get("id") or "").strip()
     }
-
-
-def update_elo_names(updates: dict[int, str]) -> int:
-    """Update only the auto-owned EloBoard name on existing roster rows (tier_members.id → name)."""
-    if not updates:
-        return 0
-
-    db = get_supabase()
-    written = 0
-    for row_id, elo_name in updates.items():
-        payload = {"name": elo_name}
-        unknown = set(payload) - AUTO_OWNED_EXISTING_COLUMNS
-        if unknown:
-            raise RuntimeError(f"Refusing to update non-owned roster fields: {sorted(unknown)}")
-        db.table("tier_members").update(payload).eq("id", row_id).execute()
-        written += 1
-    return written
 
 
 def drop_resolved_candidates(elo_ids: set[int]) -> int:

@@ -56,16 +56,10 @@ def _run(monkeypatch, members, api, pending=()):
     monkeypatch.setattr(job, 'load_roster', lambda: rows)
     monkeypatch.setattr(job, 'load_pending_ids', lambda: set(pending))
     monkeypatch.setattr(job, 'fetch_tier_players', lambda: players)
-    def names(u):
-        if u:
-            out['names'] = u
-        return len(u)
-
     def cands(c):
         if c:
             out['cands'] = c
         return len(c)
-    monkeypatch.setattr(job, 'update_elo_names', names)
     monkeypatch.setattr(job, 'upsert_candidates', cands)
     monkeypatch.setattr(job, 'drop_resolved_candidates', lambda ids: 0)
     return job.run(), out
@@ -97,3 +91,13 @@ def test_member_without_elo_id_is_reported_not_auto_linked(monkeypatch):
                        [{'soop': 'same', 'name': '신입', 'elo': 777}])
     assert result.metadata['possible_links'] == [{'tier_member_id': 1, 'elo_id': 777, 'soop_id': 'same', 'elo_name': '신입'}]
     assert [c.id for c in out['cands']] == ['elo:777']
+
+
+def test_existing_players_are_never_modified(monkeypatch):
+    """EloBoard 이름이 달라도 명단 선수 정보는 건드리지 않는다(예전엔 이름 칸을 EloBoard 이름으로 덮어썼다)."""
+    from jobs import sync_roster as job
+    assert not hasattr(job, 'update_elo_names')
+    result, out = _run(monkeypatch, [{'soop': 'a', 'name': '박쭈이', 'elo': 100}],
+                       [{'soop': 'a', 'name': '쭈이', 'elo': 100}])
+    assert out == {}
+    assert result.records_written == 0
