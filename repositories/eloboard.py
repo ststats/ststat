@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from collections import Counter, defaultdict
 
 from models.eloboard import EloMatch
+from repositories.roster import load_linked_elo_ids
 from repositories.supabase import get_supabase
 
 
@@ -196,6 +197,7 @@ def stage_unknown_elo_candidates(matches: list[EloMatch]) -> int:
 
     roster_rows = paged_ids("tier_members")
     known = {int(r["elo_id"]) for r in roster_rows if r.get("elo_id") is not None}
+    known |= load_linked_elo_ids()   # 선수에 연결된 다른 계정(종족 변경 등)
     pending_rows = paged_ids("tier_member_candidates")
     pending = {int(r["elo_id"]) for r in pending_rows if r.get("elo_id") is not None}
 

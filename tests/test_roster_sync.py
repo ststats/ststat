@@ -45,7 +45,7 @@ def test_flatten_players_empty_on_bad_shape():
     assert flatten_players({"tiers": "not-list"}) == []
 
 
-def _run(monkeypatch, members, api, pending=()):
+def _run(monkeypatch, members, api, pending=(), linked=()):
     from jobs import sync_roster as job
     from models.roster import ExistingRosterMember, TierApiPlayer
     rows = [ExistingRosterMember(id=i + 1, soop_id=m.get('soop'), elo_name=m.get('name'), elo_id=m.get('elo'),
@@ -55,6 +55,7 @@ def _run(monkeypatch, members, api, pending=()):
     out = {}
     monkeypatch.setattr(job, 'load_roster', lambda: rows)
     monkeypatch.setattr(job, 'load_pending_ids', lambda: set(pending))
+    monkeypatch.setattr(job, 'load_linked_elo_ids', lambda: set(linked))
     monkeypatch.setattr(job, 'fetch_tier_players', lambda: players)
     def cands(c):
         if c:
@@ -101,3 +102,61 @@ def test_existing_players_are_never_modified(monkeypatch):
                        [{'soop': 'a', 'name': '쭈이', 'elo': 100}])
     assert out == {}
     assert result.records_written == 0
+
+
+def test_linked_other_race_account_is_not_new(monkeypatch):
+    """종족을 바꿔 생긴 새 ELO 계정을 선수에 연결해 두면 신규 인원에 다시 뜨지 않는다."""
+    result, out = _run(monkeypatch, [{'soop': 'zzu', 'name': '쭈이', 'elo': 100}],
+                       [{'soop': 'zzu', 'name': '쭈이', 'elo': 100}, {'soop': 'zzu', 'name': '쭈이P', 'elo': 101}],
+                       linked={101})
+    assert 'cands' not in out
+    assert result.metadata['linked_accounts'] == 1
+
+
+def test_linked_ids_empty_when_table_not_created_yet(monkeypatch):
+    from repositories import roster as repo
+
+    class Q:
+        def __getattr__(self, name):
+            return lambda *a, **k: self
+
+        def execute(self):
+            raise RuntimeError("Could not find the table 'public.tier_member_elo_links' in the schema cache")
+
+    class DB:
+        def table(self, name):
+            return Q()
+    monkeypatch.setattr(repo, "get_supabase", lambda: DB())
+    assert repo.load_linked_elo_ids() == set()
+
+
+def test_match_staging_skips_linked_accounts(monkeypatch):
+    from repositories import eloboard as repo
+    from models.eloboard import EloMatch
+    written = {}
+
+    class Q:
+        def __init__(self, name):
+            self.name = name
+
+        def __getattr__(self, attr):
+            return lambda *a, **k: self
+
+        def upsert(self, payload, **k):
+            written["ids"] = sorted(p["elo_id"] for p in payload)
+            return self
+
+        def execute(self):
+            rows = [{"id": 1, "elo_id": 100}] if self.name == "tier_members" else []
+            return type("R", (), {"data": rows})()
+
+    class DB:
+        def table(self, name):
+            return Q(name)
+    monkeypatch.setattr(repo, "get_supabase", lambda: DB())
+    monkeypatch.setattr(repo, "load_linked_elo_ids", lambda: {101})
+    m = EloMatch.from_api({"id": 9, "played_on": "2026-09-22", "participants": [
+        {"player_id": 101, "name": "쭈이P", "race": "P", "result": "win"},
+        {"player_id": 555, "name": "신입", "race": "T", "result": "loss"}]})
+    assert repo.stage_unknown_elo_candidates([m]) == 1
+    assert written["ids"] == [555]

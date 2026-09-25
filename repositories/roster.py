@@ -51,6 +51,28 @@ def load_roster() -> list[ExistingRosterMember]:
     return out
 
 
+def load_linked_elo_ids() -> set[int]:
+    """선수에 '연결 계정'으로 붙은 ELO ID(종족 변경 등으로 생긴 다른 계정). 명단에 있는 사람으로 본다.
+
+    표는 staruniv.sql이 만든다. 아직 SQL을 안 돌려 표가 없으면 빈 집합(연결 없음)으로 본다.
+    """
+    db = get_supabase()
+    out: set[int] = set()
+    start = 0
+    while True:
+        try:
+            batch = (db.table("tier_member_elo_links").select("elo_id").order("elo_id")
+                     .range(start, start + 999).execute().data or [])
+        except Exception as exc:  # 표가 없을 때(PGRST205 등)
+            if "tier_member_elo_links" in str(exc):
+                return set()
+            raise
+        out.update(int(r["elo_id"]) for r in batch if r.get("elo_id") is not None)
+        if len(batch) < 1000:
+            return out
+        start += 1000
+
+
 def load_pending_ids() -> set[str]:
     """대기 명단 행 id(소문자). 새 id는 'elo:<ELO ID>'."""
     db = get_supabase()

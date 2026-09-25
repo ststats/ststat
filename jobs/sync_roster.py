@@ -9,6 +9,7 @@ from models.sync_job import JobResult
 from repositories.roster import (
     candidate_id,
     drop_resolved_candidates,
+    load_linked_elo_ids,
     load_pending_ids,
     load_roster,
     upsert_candidates,
@@ -78,6 +79,8 @@ def run() -> JobResult:
     # 찾으면 명단에 있는 사람이 매번 '신규'로 대기 명단에 올라왔다. ELO ID가 없는 선수만 SOOP ID로 찾는다.
     by_elo = {m.elo_id: m for m in members if m.elo_id is not None}
     by_soop = {m.soop_id.lower(): m for m in members if m.soop_id}
+    # 종족 변경 등으로 생긴 다른 계정을 어드민에서 선수에 '연결'해 두면 그 ELO ID도 명단에 있는 사람이다
+    linked = load_linked_elo_ids()
 
     pending_ids = load_pending_ids()
     api_players = fetch_tier_players()
@@ -87,6 +90,8 @@ def run() -> JobResult:
     soop_mismatch: list[dict] = []
 
     for player in api_players:
+        if player.elo_id is not None and player.elo_id in linked:
+            continue
         existing = by_elo.get(player.elo_id) if player.elo_id is not None else None
         if existing is None and player.elo_id is None and player.soop_id:
             existing = by_soop.get(player.soop_id.lower())
@@ -127,7 +132,7 @@ def run() -> JobResult:
         )
 
     candidates_written = upsert_candidates(new_candidates)
-    resolved = drop_resolved_candidates(set(by_elo))
+    resolved = drop_resolved_candidates(set(by_elo) | linked)
 
     return JobResult(
         records_read=len(api_players),
@@ -137,6 +142,7 @@ def run() -> JobResult:
             "roster_count": len(members),
             "new_candidates": candidates_written,
             "candidates_resolved": resolved,
+            "linked_accounts": len(linked),
             # 명단에 ELO ID가 비어 있고 SOOP ID만 같은 경우(어드민 선수 관리에서 ELO ID를 확인해 채우면 된다)
             "possible_links": soop_mismatch,
         },
