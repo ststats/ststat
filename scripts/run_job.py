@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import time
@@ -89,6 +90,16 @@ def main():
             "error_message": str(exc)[:5000],
         })
         raise
+
+    # 결과 요약을 Actions 로그에도 남긴다(DB를 열지 않고 실행 결과를 확인할 수 있게)
+    summary = {
+        "records_read": result.records_read,
+        "records_written": result.records_written,
+        "records_skipped": result.records_skipped,
+        "metadata": result.metadata,
+    }
+    text = json.dumps(summary, ensure_ascii=False, default=str)
+    print(f"[{job_name}] result: {text[:4000]}{' …(생략)' if len(text) > 4000 else ''}")
 
     ok = record(db, sync_job_id, {
         "status": "success",

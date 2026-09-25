@@ -12,6 +12,7 @@ from repositories.eloboard import (
     get_latest_match_id,
     load_match_ids_between,
     load_match_rows,
+    save_deletion_backup,
     load_previous_pending_deletes,
     stage_unknown_elo_candidates,
     upsert_dimensions,
@@ -155,6 +156,9 @@ def run() -> JobResult:
             confirmed = gone & load_previous_pending_deletes()
             # 지우기 전에 원본 행을 작업 기록에 남긴다(잘못 지웠을 때 그대로 되살릴 수 있게)
             deleted_rows = load_match_rows(confirmed)
+            if len(deleted_rows) != len(confirmed):
+                raise RuntimeError("Could not load every match to back up before deletion; refusing to delete")
+            save_deletion_backup(deleted_rows, os.getenv("GITHUB_RUN_ID"))
             deleted = delete_match_ids(confirmed)
             pending_delete = sorted(gone - confirmed)[:MAX_PENDING_DELETE]
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from collections import Counter, defaultdict
 
 from models.eloboard import EloMatch
@@ -133,6 +135,25 @@ def load_match_rows(ids: set[int]) -> list[dict]:
             or []
         )
     return out
+
+
+def save_deletion_backup(rows: list[dict], run_id: str | None = None) -> None:
+    """지우기 '전에' 원본 행을 sync_jobs에 따로 한 행으로 남긴다(작업이 도중에 죽어도 남는다).
+
+    되살리기: 이 행의 metadata.rows를 elo_matches에 upsert하면 된다. 저장에 실패하면 예외가
+    올라가 삭제 자체를 하지 않는다.
+    """
+    if not rows:
+        return
+    now = datetime.now(timezone.utc).isoformat()
+    get_supabase().table("sync_jobs").insert({
+        "job_name": "sync_eloboard_deleted_backup",
+        "run_id": run_id,
+        "status": "success",
+        "finished_at": now,
+        "records_read": len(rows),
+        "metadata": {"rows": rows},
+    }).execute()
 
 
 def delete_match_ids(ids: set[int]) -> int:

@@ -63,3 +63,34 @@ def test_api_detail_missing_video_is_not_zeroed(monkeypatch):
     _, videos, method = yt.collect_channel("https://youtube.com/@x", {}, 5)
     assert method == "api"
     assert {v["id"]: (v["views"], v["short"]) for v in videos} == {"v1": (None, None), "v2": (50, False)}
+
+
+def test_unknown_short_is_rechecked_on_the_next_run_and_stored_correctly(monkeypatch):
+    """1회차: 쇼츠 판별 실패(503) → DB에 저장하지 않음. 2회차: 다시 판별(200) → short=True로 저장."""
+    from jobs import sync_videos as job
+    from collectors import youtube_videos as yt
+
+    db_videos: dict[str, dict] = {}
+    monkeypatch.setattr(job, "load_active_channels", lambda: [{"channel_url": "https://youtube.com/@x"}])
+    monkeypatch.setattr(job, "load_existing_videos", lambda: {k: dict(v) for k, v in db_videos.items()})
+    monkeypatch.setattr(job, "update_channel_metadata", lambda url, info: None)
+
+    def upsert(url, items, existing):
+        for it in items:
+            db_videos[it["id"]] = {"id": it["id"], "channel_url": url, "short": it["short"], "views": it.get("views")}
+        return len(items)
+    monkeypatch.setattr(job, "upsert_collected_videos", upsert)
+    monkeypatch.setattr(job, "collect_channel", lambda url, ch, n, full=False: (
+        {"id": "UC"}, [{"id": "vid00000001", "views": 5, "short": None},
+                       {"id": "vid00000002", "views": 9, "short": False}], "api"))
+    monkeypatch.setattr(yt, "DELAY", 0)
+    status = {"code": 503}
+    monkeypatch.setattr(yt, "http_get", lambda url, **kw: (status["code"], ""))
+
+    job.run()
+    assert "vid00000001" not in db_videos          # 모름 → 저장 안 함(False로 굳지 않음)
+    assert db_videos["vid00000002"]["short"] is False
+
+    status["code"] = 200
+    job.run()
+    assert db_videos["vid00000001"]["short"] is True

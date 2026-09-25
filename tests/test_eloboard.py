@@ -108,9 +108,17 @@ def _setup_sync(monkeypatch, pages, stop_at, db_window_ids, backfill=False, prev
         asked["range"] = (a, b)
         return set(db_window_ids)
     monkeypatch.setattr(job, "load_match_ids_between", window)
-    monkeypatch.setattr(job, "delete_match_ids", lambda ids: (saved.setdefault("deleted", sorted(ids)) and len(ids)) if ids else 0)
+    def delete(ids):
+        if not ids:
+            return 0
+        saved.setdefault("order", []).append(("delete", sorted(ids)))
+        saved["deleted"] = sorted(ids)
+        return len(ids)
+    monkeypatch.setattr(job, "delete_match_ids", delete)
     monkeypatch.setattr(job, "load_previous_pending_deletes", lambda: set(previous_pending))
     monkeypatch.setattr(job, "load_match_rows", lambda ids: [{"elo_match_id": i} for i in sorted(ids)])
+    monkeypatch.setattr(job, "save_deletion_backup",
+                        lambda rows, run_id=None: saved.setdefault("order", []).append(("backup", [r["elo_match_id"] for r in rows])))
 
     class FixedDateTime(dt.datetime):
         @classmethod
@@ -196,3 +204,21 @@ def test_invalid_rows_are_counted_with_reasons_and_not_saved(monkeypatch):
     result = job.run()
     assert 2990 not in saved["ids"]
     assert {"id": 2990, "reason": "bad_date"} in result.metadata["invalid_samples"]
+
+
+def test_backup_is_saved_before_deleting_and_failure_blocks_deletion(monkeypatch):
+    import pytest
+    pages = [[_row(3000, "2026-09-23")]]
+    job, saved, _ = _setup_sync(monkeypatch, pages, stop_at=3000, db_window_ids={3000, 2500},
+                                previous_pending={2500})
+    job.run()
+    assert saved["order"] == [("backup", [2500]), ("delete", [2500])]
+
+    job, saved, _ = _setup_sync(monkeypatch, pages, stop_at=3000, db_window_ids={3000, 2500},
+                                previous_pending={2500})
+    def fail(rows, run_id=None):
+        raise RuntimeError("backup write failed")
+    monkeypatch.setattr(job, "save_deletion_backup", fail)
+    with pytest.raises(RuntimeError, match="backup write failed"):
+        job.run()
+    assert "deleted" not in saved

@@ -64,6 +64,14 @@ def test_months_are_counted_separately_and_unchanged_days_are_not_republished(mo
     assert result["days_checked"] == 2
 
 
+def test_deleted_match_brings_counts_back_to_zero(monkeypatch):
+    days = ["2026-09-10"]
+    rows = {"2026-09-10": [_row("2026-09-10", "a", 1, 1, 0), _row("2026-09-10", "b", 2, 0, 1)]}
+    published = _setup(monkeypatch, days, [], rows)        # 그 경기가 지워져 이제 경기 없음
+    repo.refresh_sponsor_stats("2026-09-01", "2026-09-30")
+    assert [(r["sponsor_wins"], r["sponsor_losses"]) for r in published["2026-09-10"]] == [(0, 0), (0, 0)]
+
+
 def test_missing_month_end_snapshot_is_reported(monkeypatch):
     from jobs import sync_synergy_daily as job
 
