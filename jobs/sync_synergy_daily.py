@@ -13,6 +13,7 @@ from repositories.synergy_stats import (
     apply_roster_backfill,
     clear_modified_at,
     existing_snapshot_count,
+    first_snapshot_date,
     get_month_confirmation,
     load_roster_for_synergy,
     load_poonggo_month,
@@ -90,10 +91,14 @@ def _confirm_closed_months(today: date) -> dict:
     confirmed = 0
     poonggo_rows = 0
     missing_month_end: list[str] = []
+    # 방송통계를 처음 게시하기 전 달은 월말 스냅샷이 없는 게 정상이라 보지 않는다
+    first_day = first_snapshot_date()
     month = _previous_month(today)
     for _ in range(MAX_CONFIRM_MONTHS_PER_RUN):
         last_day = _month_end(month)
         last_day_str = last_day.isoformat()
+        if first_day is None or last_day_str < first_day:
+            break
         if existing_snapshot_count(last_day_str) == 0:
             # 월말 당일 게시가 빠진 달은 확정할 수 없다. 조용히 넘기지 않고 작업 기록에 남긴다.
             if not get_month_confirmation(month.isoformat()).get("poonggo_complete"):

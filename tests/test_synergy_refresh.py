@@ -79,7 +79,9 @@ def test_missing_month_end_snapshot_is_reported(monkeypatch):
     monkeypatch.setattr(job, "get_month_confirmation",
                         lambda m: {"poonggo_complete": m != "2026-08-01", "sponsor_complete": m != "2026-08-01"})
     monkeypatch.setattr(job, "load_snapshot_roster", lambda d: [object()])
+    monkeypatch.setattr(job, "first_snapshot_date", lambda: "2026-07-15")
     result = job._confirm_closed_months(date(2026, 9, 25))
+    # 7/31은 스냅샷이 있고(5건), 8/31만 빠짐. 첫 게시(7/15) 이전 달은 보지 않는다
     assert result["missing_month_end"] == ["2026-08-31"]
 
 

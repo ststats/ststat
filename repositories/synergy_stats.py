@@ -401,3 +401,13 @@ def load_poonggo_month(month_start: str) -> dict[str, MonthlyLiveStats]:
         if len(rows) < PAGE_SIZE:
             return out
         start += PAGE_SIZE
+
+
+def first_snapshot_date() -> str | None:
+    """방송통계가 처음 게시된 날짜(그 전 달은 월말 스냅샷이 없는 게 정상)."""
+    rows = (
+        get_supabase().table("synergy_daily_dates")
+        .select("stat_date").order("stat_date").limit(1).execute().data
+        or []
+    )
+    return str(rows[0]["stat_date"])[:10] if rows else None
