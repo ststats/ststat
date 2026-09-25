@@ -45,7 +45,13 @@ python scripts/run_job.py audit_match_rounds
 - **EloBoard 요청 간격은 최소 2초**(운영자 요청). `ELOBOARD_DELAY`는 늘릴 수만 있고, 2초 미만이나 잘못된 값은
   `collectors/eloboard.py`의 `MIN_DELAY`(2초)로 올라갑니다.
 - 정기 수집은 이번 달 1일(매월 1~7일은 지난달 1일)부터 다시 읽습니다. 사라진 경기 삭제는 그 기간 안에서만,
-  기간 경기 수의 2%(최소 50건)까지만 하고 넘으면 지우지 않습니다.
+  기간 경기 수의 2%(최소 50건)까지만 하고 넘으면 지우지 않습니다. 또 **두 번 연속 안 보인 경기만** 지웁니다
+  (처음 안 보이면 `sync_jobs.metadata.pending_delete`에 적어 두고 다음 실행에서도 없을 때 삭제 - 수집 도중
+  EloBoard 목록이 밀려 한 번 안 보인 경기를 지우지 않게).
+- 러너가 취소·강제 종료돼 `running`으로 남은 `sync_jobs` 행은 같은 작업이 다음에 시작할 때 3시간이 지났으면
+  실패로 닫힙니다. 같은 이유로 남은 `building` 파생 스냅샷도 3시간이 지나면 다음 파생 계산 때 지워집니다.
+- 파생 계산(`calculate_eloboard_stats`)은 경기를 ID 구간으로 나눠 동시에 읽고(정확한 행 수와 맞춰 봄),
+  결과도 동시에 씁니다. 단계별 걸린 시간은 `sync_jobs.metadata.timings`에 남습니다.
 - `backfill-eloboard.yml`: 누락 복구용으로 EloBoard 전체를 다시 읽어 upsert합니다(삭제 없음, 1시간 반 안팎).
 - 2026-09-24 경기 삭제 사고는 staruniv에 남아 있던 2026-09-22 백업 JSON으로 복구했다(복구 작업은 끝나서 코드 삭제, git 기록 `b38249f`에 있음).
-- 티어 랭킹 모델 설명: staruniv 저장소 `notes/TIER_RANKING_MODEL_2026-09-23.md`, 계산 코드는 `processors/staruniv_ranking.py`.
+- 티어 랭킹 모델 설명과 계산 코드: `processors/staruniv_ranking.py`(파일 머리 설명).

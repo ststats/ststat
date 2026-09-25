@@ -66,6 +66,7 @@ def test_sync_rereads_old_ids_restored_within_this_month(monkeypatch):
     monkeypatch.setattr(job, "stage_unknown_elo_candidates", lambda m: 0)
     monkeypatch.setattr(job, "load_match_ids_between", lambda a, b: set())
     monkeypatch.setattr(job, "delete_match_ids", lambda ids: 0)
+    monkeypatch.setattr(job, "load_previous_pending_deletes", lambda: set())
 
     class FixedDateTime(dt.datetime):
         @classmethod
@@ -79,7 +80,7 @@ def test_sync_rereads_old_ids_restored_within_this_month(monkeypatch):
 
 
 
-def _setup_sync(monkeypatch, pages, stop_at, db_window_ids, backfill=False):
+def _setup_sync(monkeypatch, pages, stop_at, db_window_ids, backfill=False, previous_pending=()):
     import datetime as dt
     from jobs import sync_eloboard as job
     monkeypatch.setattr(job, "fetch_page", lambda offset, delay=0: pages[offset // job.PAGE_STEP] if offset // job.PAGE_STEP < len(pages) else [])
@@ -95,7 +96,8 @@ def _setup_sync(monkeypatch, pages, stop_at, db_window_ids, backfill=False):
         asked["range"] = (a, b)
         return set(db_window_ids)
     monkeypatch.setattr(job, "load_match_ids_between", window)
-    monkeypatch.setattr(job, "delete_match_ids", lambda ids: saved.setdefault("deleted", sorted(ids)) and len(ids))
+    monkeypatch.setattr(job, "delete_match_ids", lambda ids: (saved.setdefault("deleted", sorted(ids)) and len(ids)) if ids else 0)
+    monkeypatch.setattr(job, "load_previous_pending_deletes", lambda: set(previous_pending))
 
     class FixedDateTime(dt.datetime):
         @classmethod
@@ -109,11 +111,24 @@ def test_deletion_only_considers_the_scanned_date_window(monkeypatch):
     """옛 ID(2112333)가 스캔에 보여도 날짜 범위 밖 경기는 지우지 않는다(2026-09-24 사고 재현)."""
     pages = [[_row(3000, "2026-09-23"), _row(2112333, "2026-09-10"), _row(10, "2026-08-20")]]
     # 날짜 범위(9/1~9/24) 안의 저장된 경기: 3000, 2112333, 그리고 EloBoard에서 사라진 2500
-    job, saved, asked = _setup_sync(monkeypatch, pages, stop_at=3000, db_window_ids={3000, 2112333, 2500})
+    job, saved, asked = _setup_sync(monkeypatch, pages, stop_at=3000, db_window_ids={3000, 2112333, 2500},
+                                    previous_pending={2500})
     result = job.run()
     assert asked["range"] == ("2026-09-01", "2026-09-24")
     assert saved["deleted"] == [2500]
     assert result.metadata["delete_skipped"] is None
+    assert result.metadata["pending_delete"] == []
+
+
+def test_first_miss_is_kept_until_the_next_run(monkeypatch):
+    """한 번 안 보인 경기는 지우지 않고 다음 실행으로 넘긴다(목록이 밀려 한 번 빠졌을 수 있다)."""
+    pages = [[_row(3000, "2026-09-23"), _row(2900, "2026-09-10")]]
+    job, saved, _ = _setup_sync(monkeypatch, pages, stop_at=3000, db_window_ids={3000, 2900, 2500, 2400},
+                                previous_pending={2400, 1234})
+    result = job.run()
+    assert saved["deleted"] == [2400]                      # 지난번에도 안 보였던 것만
+    assert result.metadata["pending_delete"] == [2500]     # 처음 안 보인 것은 다음 실행에서 판정
+    assert result.metadata["matches_deleted"] == 1
 
 
 def test_mass_deletion_is_refused(monkeypatch):

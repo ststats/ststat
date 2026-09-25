@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 from models.sync_job import JobResult
@@ -16,13 +17,25 @@ from repositories.derived_stats import (
 
 
 def run() -> JobResult:
+    timings = {}
+    started = time.monotonic()
+
+    def lap(name):
+        nonlocal started
+        now = time.monotonic()
+        timings[name] = round(now - started, 1)
+        started = now
+
     source = load_source_data()
+    lap('load_seconds')
     match_count = len(source['matches'])
     processor_dir = Path(__file__).resolve().parents[1] / 'processors'
 
     cache_metadata = history_cache_metadata(source)
     history_cache = load_active_history_cache(cache_metadata)
+    lap('history_cache_seconds')
     payload = build_payload(source, processor_dir, history_cache=history_cache)
+    lap('compute_seconds')
     as_of = payload['ranking_meta']['as_of']
     snapshot_id = create_snapshot(
         as_of,
@@ -37,6 +50,7 @@ def run() -> JobResult:
     )
     try:
         counts = write_snapshot(snapshot_id, payload)
+        lap('write_seconds')
         activate_snapshot(snapshot_id)
     except Exception as exc:
         mark_failed(snapshot_id, str(exc))
@@ -50,6 +64,7 @@ def run() -> JobResult:
         cleanup_old_snapshots(keep=3)
     except Exception as exc:
         cleanup_warning = f"{type(exc).__name__}: {exc}"[:3000]
+    lap('activate_cleanup_seconds')
 
     written = sum(counts.values())
     return JobResult(
@@ -69,5 +84,6 @@ def run() -> JobResult:
             'safe_snapshot_swap': True,
             'history_cache_reused': bool(history_cache),
             'cleanup_warning': cleanup_warning,
+            'timings': timings,
         },
     )

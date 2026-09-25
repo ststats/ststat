@@ -204,3 +204,33 @@ def stage_unknown_elo_candidates(matches: list[EloMatch]) -> int:
     ]
     db.table("tier_member_candidates").upsert(payload, on_conflict="id").execute()
     return len(payload)
+
+
+def load_previous_pending_deletes() -> set[int]:
+    """지난번 성공한 sync_eloboard가 '안 보였다'고 적어 둔 경기 ID.
+
+    EloBoard 목록은 위치(offset)로 넘기므로 수집 도중 경기가 끼어들면 한두 건이 한 번 안
+    보일 수 있다. 두 번 연속 안 보인 경기만 지우려고 지난번 목록을 읽는다.
+    """
+    db = get_supabase()
+    rows = (
+        db.table("sync_jobs")
+        .select("metadata")
+        .eq("job_name", "sync_eloboard")
+        .eq("status", "success")
+        .order("started_at", desc=True)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        return set()
+    pending = (rows[0].get("metadata") or {}).get("pending_delete") or []
+    out = set()
+    for value in pending:
+        try:
+            out.add(int(value))
+        except (TypeError, ValueError):
+            continue
+    return out

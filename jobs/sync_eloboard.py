@@ -11,6 +11,7 @@ from repositories.eloboard import (
     delete_match_ids,
     get_latest_match_id,
     load_match_ids_between,
+    load_previous_pending_deletes,
     stage_unknown_elo_candidates,
     upsert_dimensions,
     upsert_matches,
@@ -44,6 +45,8 @@ FULL_BACKFILL = os.getenv("ELOBOARD_BACKFILL", "") == "1"
 # EloBoard가 실제로 경기를 지우는 건 드물다 - 대량 삭제는 수집 쪽 착오일 가능성이 크다.
 MAX_DELETE_RATIO = float(os.getenv("ELOBOARD_MAX_DELETE_RATIO", "0.02"))
 MAX_DELETE_MIN = int(os.getenv("ELOBOARD_MAX_DELETE_MIN", "50"))
+# 다음 실행에 넘길 '이번에 안 보인 경기' 목록의 최대 길이(sync_jobs.metadata 크기 제한)
+MAX_PENDING_DELETE = 5000
 
 
 def run() -> JobResult:
@@ -127,8 +130,11 @@ def run() -> JobResult:
     # EloBoard에서 사라진 경기 지우기. 이번에 끝까지 훑은 '날짜 범위'(cutoff ~ 오늘) 안에서만
     # 판정한다. ID 범위(min_seen 이상)로 고르면 날짜 순서 목록에서 훑지 않은 옛 경기까지
     # 지운다. 전체 다시 받기 때와 삭제 후보가 비정상적으로 많을 때는 지우지 않는다.
+    # 목록을 위치(offset)로 넘기므로 수집 도중 경기가 끼어들면 한두 건이 한 번 안 보일 수 있다 -
+    # 지난번 실행에서도 안 보였던 경기(두 번 연속)만 지우고, 이번에 처음 안 보인 것은 다음으로 넘긴다.
     deleted = 0
     delete_skipped = None
+    pending_delete: list[int] = []
     if FULL_BACKFILL:
         delete_skipped = "full_backfill"
     elif cutoff:
@@ -138,7 +144,9 @@ def run() -> JobResult:
         if len(gone) > limit:
             delete_skipped = f"too_many:{len(gone)}>{limit}"
         else:
-            deleted = delete_match_ids(gone)
+            confirmed = gone & load_previous_pending_deletes()
+            deleted = delete_match_ids(confirmed)
+            pending_delete = sorted(gone - confirmed)[:MAX_PENDING_DELETE]
 
     return JobResult(
         records_read=raw_count,
@@ -155,6 +163,7 @@ def run() -> JobResult:
             "matches_upserted": upserted,
             "matches_deleted": deleted,
             "delete_skipped": delete_skipped,
+            "pending_delete": pending_delete,
             "full_backfill": FULL_BACKFILL,
             "candidate_players_staged": candidates,
             "players_upserted": dimensions["players"],
