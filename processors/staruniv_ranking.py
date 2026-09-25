@@ -429,6 +429,33 @@ def race_terms(node_race, wi, li):
     return idx, sign
 
 
+# 최적화 결과를 게시해도 되는지의 기준. 실제 경기 37만 건으로 잰 36번의 최적화는 모두 수렴했고
+# 남은 기울기는 최대 0.0038이었다. 수렴 보고가 없어도 기울기가 이 값(그 10배 넘게 여유) 안이면
+# 경고만 하고 쓰고, 넘거나 값이 유한하지 않으면 멈춘다 - 파생 작업이 실패로 끝나 지금 게시된
+# 스냅샷이 그대로 남는다.
+MAX_UNCONVERGED_GRAD = 0.05
+
+
+def accept_solution(res, label, bounds=None):
+    x = np.asarray(res.x, dtype=float)
+    g = np.array(res.jac, dtype=float)
+    if not (np.all(np.isfinite(x)) and np.all(np.isfinite(g))):
+        raise RuntimeError(f'{label}: 해에 유한하지 않은 값이 있어 결과를 쓰지 않습니다 ({res.message})')
+    if res.success:
+        return
+    if bounds:
+        # 경계에 붙은 변수는 경계 바깥쪽을 향하는 기울기가 남는 게 정상이라 뺀다(사영 기울기)
+        for i, (lo, hi) in enumerate(bounds):
+            if lo is not None and x[i] <= lo + 1e-9 and g[i] > 0:
+                g[i] = 0.0
+            if hi is not None and x[i] >= hi - 1e-9 and g[i] < 0:
+                g[i] = 0.0
+    worst = float(np.max(np.abs(g))) if g.size else 0.0
+    if worst > MAX_UNCONVERGED_GRAD:
+        raise RuntimeError(f'{label}: 수렴하지 않았고 남은 기울기 {worst:.4f}가 커서 결과를 쓰지 않습니다 ({res.message})')
+    print(f'   ⚠️ {label}: 수렴 보고는 없지만 남은 기울기 {worst:.4f}로 기준 안이라 사용합니다 ({res.message})')
+
+
 def fit_delta(wi, li, ww, win_tier_idx, lose_tier_idx, lam, n_players, m,
               race=None, race_idx=None, race_sign=None):
     """티어 기준선 m(과 종족 상성)을 고정한 채 티어 안 편차 δ만 맞춘다(2단 중 2단).
@@ -451,8 +478,7 @@ def fit_delta(wi, li, ww, win_tier_idx, lose_tier_idx, lam, n_players, m,
 
     res = minimize(fun_grad, np.zeros(n_players), jac=True, method='L-BFGS-B',
                    options={'maxiter': 20000, 'maxfun': 40000, 'ftol': 1e-14, 'gtol': 1e-9})
-    if not res.success:
-        print(f'   ⚠️ δ 최적화가 수렴했다고 보고하지 않았습니다: {res.message}')
+    accept_solution(res, 'δ 최적화')
     return res.x
 
 
@@ -721,8 +747,7 @@ def fit(wi, li, ww, win_tier_idx, lose_tier_idx, lam, n_players, n_tiers,
         bounds[n_players + idx] = (MIN_TIER_GAP, None)
     res = minimize(fun_grad, x0, jac=True, method='L-BFGS-B', bounds=bounds,
                    options={'maxiter': 20000, 'maxfun': 40000, 'ftol': 1e-14, 'gtol': 1e-9})
-    if not res.success:
-        print(f'   ⚠️ 최적화가 수렴했다고 보고하지 않았습니다: {res.message}')
+    accept_solution(res, '티어 기준선 최적화', bounds)
     delta = res.x[:n_players].copy()
     m = tier_parameters_to_levels(res.x[n_players:n_players + n_tiers], n_tiers)
     race = res.x[n_players + n_tiers:].copy()

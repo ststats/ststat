@@ -21,3 +21,45 @@ def test_video_upsert_never_writes_admin_hidden_field():
         upsert_collected_videos("channel", [{"id": "v1", "title": "T"}], {})
     payload = db.table.return_value.upsert.call_args.args[0]
     assert "hidden" not in payload[0]
+
+
+def test_iso_duration_counts_days():
+    assert iso_duration_sec("P1DT2H") == 26 * 3600
+    assert iso_duration_sec("P2D") == 2 * 86400
+
+
+def test_short_check_failure_is_unknown_and_not_saved_as_false(monkeypatch):
+    from collectors import youtube_videos as yt
+    monkeypatch.setattr(yt, "DELAY", 0)
+    responses = {"a": 503, "b": 303, "c": 200}
+    monkeypatch.setattr(yt, "http_get", lambda url, **kw: (responses[url.rsplit("/", 1)[1]], ""))
+    assert yt.is_short("a") is None
+    assert yt.is_short("b") is False
+    assert yt.is_short("c") is True
+    items = [{"id": "a", "short": None}, {"id": "b", "short": None}, {"id": "c", "short": None},
+             {"id": "d", "short": None}]
+    responses["d"] = 0
+    out = yt.resolve_short_flags(items, previous={"d": {"short": True}})
+    # a: 판별 실패 → 이번엔 저장하지 않음(다음 실행에 다시 판별), d: 저장된 값 사용
+    assert {x["id"]: x["short"] for x in out} == {"b": False, "c": True, "d": True}
+
+
+def test_missing_view_count_keeps_existing_value():
+    db = MagicMock()
+    with patch("repositories.videos.get_supabase", return_value=db):
+        upsert_collected_videos("ch", [{"id": "v1", "title": "T", "views": None, "short": False},
+                                       {"id": "v2", "title": "T", "views": 7, "short": False}],
+                                {"v1": {"views": 1234}})
+    payload = db.table.return_value.upsert.call_args.args[0]
+    assert {p["id"]: p["views"] for p in payload} == {"v1": 1234, "v2": 7}
+
+
+def test_api_detail_missing_video_is_not_zeroed(monkeypatch):
+    from collectors import youtube_videos as yt
+    monkeypatch.setattr(yt, "API_KEY", "k")
+    monkeypatch.setattr(yt, "api_channel", lambda url, cached: {"id": "UC", "uploads": "UU"})
+    monkeypatch.setattr(yt, "api_uploads", lambda pid, pages: [{"id": "v1"}, {"id": "v2"}])
+    monkeypatch.setattr(yt, "api_stats", lambda ids: {"v2": (50, 600)})
+    _, videos, method = yt.collect_channel("https://youtube.com/@x", {}, 5)
+    assert method == "api"
+    assert {v["id"]: (v["views"], v["short"]) for v in videos} == {"v1": (None, None), "v2": (50, False)}

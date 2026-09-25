@@ -15,6 +15,7 @@ from repositories.synergy_stats import (
     existing_snapshot_count,
     get_month_confirmation,
     load_roster_for_synergy,
+    load_poonggo_month,
     load_snapshot_roster,
     refresh_sponsor_stats,
     upsert_daily_snapshot,
@@ -47,6 +48,25 @@ def _marker_date(marker: str | None) -> str | None:
         return date.fromisoformat(str(marker or "")[:10]).isoformat()
     except ValueError:
         return None
+
+
+# 월 누적치는 달 안에서 줄지 않는다. 여러 계정이 한꺼번에 크게 줄면 Poonggo 쪽 일시 이상일 가능성이
+# 커서 이번 실행은 게시하지 않고(이전 값 유지) 다음 실행에서 다시 받는다. 한두 계정의 감소는
+# 실제 정정일 수 있어 그대로 받는다.
+DROP_RATIO = 0.5
+MAX_DROPPED_ACCOUNTS = 3
+MAX_DROPPED_SHARE = 0.10
+
+
+def _check_poonggo_drop(previous: dict, current: dict, label: str) -> int:
+    base = [sid for sid, prev in previous.items() if prev.balloons > 0 and sid in current]
+    dropped = [sid for sid in base if current[sid].balloons < previous[sid].balloons * DROP_RATIO]
+    if len(dropped) > max(MAX_DROPPED_ACCOUNTS, int(len(base) * MAX_DROPPED_SHARE)):
+        raise RuntimeError(
+            f"Poonggo {label}: balloons dropped by >50% for {len(dropped)}/{len(base)} accounts; "
+            f"keeping previous values and retrying next run (sample={sorted(dropped)[:10]})"
+        )
+    return len(dropped)
 
 
 def _require_poonggo_coverage(roster, poonggo, label: str) -> None:
@@ -140,6 +160,7 @@ def run() -> JobResult:
     soop_ids = [m.soop_id for m in roster]
     poonggo = fetch_monthly(today.year, today.month, soop_ids)
     _require_poonggo_coverage(roster, poonggo, stat_date)
+    poonggo_dropped = _check_poonggo_drop(load_poonggo_month(month_start_str), poonggo, stat_date)
 
     sponsor = aggregate_sponsor_stats(month_start_str, stat_date)
     rows = build_daily_rows(stat_date, month_start_str, roster, poonggo, sponsor)
@@ -187,6 +208,7 @@ def run() -> JobResult:
             "month_start": month_start_str,
             "roster_count": len(roster),
             "poonggo_count": len(poonggo),
+            "poonggo_dropped_accounts": poonggo_dropped,
             "sponsor_players": len(sponsor),
             "daily_rows": daily_written,
             "modified_members_backfilled": len(corrected_members),

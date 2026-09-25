@@ -88,6 +88,7 @@ def test_daily_run_refreshes_from_rescan_window_or_earliest_backfill_marker(monk
     monkeypatch.setattr(job, "load_roster_for_synergy", lambda: roster)
     monkeypatch.setattr(job, "fetch_monthly", lambda y, m, ids: {i: MonthlyLiveStats() for i in ids})
     monkeypatch.setattr(job, "aggregate_sponsor_stats", lambda a, b: {})
+    monkeypatch.setattr(job, "load_poonggo_month", lambda m: {})
     monkeypatch.setattr(job, "upsert_poonggo_month", lambda m, d: len(d))
     monkeypatch.setattr(job, "upsert_daily_snapshot", lambda d, rows: len(rows))
     monkeypatch.setattr(job, "apply_roster_backfill", lambda m, d: calls.setdefault("backfill", d) and 1)

@@ -183,3 +183,24 @@ def test_main_ranks_by_theta_and_exports_every_fitted_player(tmp_path):
     assert ps['300'].get('theta') is not None                  # 순위 밖 선수도 θ 공개
     assert ps['300'].get('k') is None
     assert all(p.get('thetaSE', 0) > 0 for p in ps.values() if p.get('theta') is not None)
+
+
+def test_accept_solution_blocks_bad_results_and_tolerates_near_optimal():
+    from types import SimpleNamespace
+    import numpy as np
+    import pytest
+    from processors.staruniv_ranking import accept_solution
+
+    ok = SimpleNamespace(x=np.array([1.0, 2.0]), jac=np.array([1e-5, -1e-5]), success=True, message='ok')
+    accept_solution(ok, 't')
+    near = SimpleNamespace(x=np.array([1.0]), jac=np.array([0.01]), success=False, message='ABNORMAL')
+    accept_solution(near, 't')                                   # 기준 안: 경고만
+    far = SimpleNamespace(x=np.array([1.0]), jac=np.array([0.5]), success=False, message='ABNORMAL')
+    with pytest.raises(RuntimeError):
+        accept_solution(far, 't')
+    nan = SimpleNamespace(x=np.array([np.nan]), jac=np.array([0.0]), success=True, message='ok')
+    with pytest.raises(RuntimeError):
+        accept_solution(nan, 't')
+    # 하한에 붙은 변수의 바깥쪽 기울기는 문제 삼지 않는다
+    at_bound = SimpleNamespace(x=np.array([0.1]), jac=np.array([3.0]), success=False, message='ABNORMAL')
+    accept_solution(at_bound, 't', bounds=[(0.1, None)])

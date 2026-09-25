@@ -374,3 +374,30 @@ def refresh_sponsor_stats(from_date: str, to_date: str) -> dict:
                 changed_days.append(day)
                 changed_rows += diff
     return {"days_checked": len(days), "days_changed": changed_days[:60], "rows_changed": changed_rows}
+
+
+def load_poonggo_month(month_start: str) -> dict[str, MonthlyLiveStats]:
+    """이미 저장된 그달 Poonggo 누적치(급감 검사용)."""
+    db = get_supabase()
+    out: dict[str, MonthlyLiveStats] = {}
+    start = 0
+    while True:
+        rows = (
+            db.table("poonggo_monthly_stats")
+            .select("soop_id,balloons,broadcast_seconds,cumulative_viewers")
+            .eq("month_start", month_start)
+            .order("soop_id")
+            .range(start, start + PAGE_SIZE - 1)
+            .execute()
+            .data
+            or []
+        )
+        for r in rows:
+            out[str(r["soop_id"])] = MonthlyLiveStats(
+                balloons=int(r.get("balloons") or 0),
+                broadcast_seconds=int(r.get("broadcast_seconds") or 0),
+                cumulative_viewers=int(r.get("cumulative_viewers") or 0),
+            )
+        if len(rows) < PAGE_SIZE:
+            return out
+        start += PAGE_SIZE

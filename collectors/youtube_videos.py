@@ -126,7 +126,7 @@ def fetch_feed(channel_id: str) -> tuple[str, list[dict]]:
             continue
         media = entry.find("media:group", NS)
         thumb = ""
-        views = 0
+        views = None  # 모르면 None - 저장 때 기존 조회수를 유지한다
         if media is not None:
             tn = media.find("media:thumbnail", NS)
             if tn is not None:
@@ -134,9 +134,9 @@ def fetch_feed(channel_id: str) -> tuple[str, list[dict]]:
             stat = media.find("media:community/media:statistics", NS)
             if stat is not None:
                 try:
-                    views = int(stat.attrib.get("views", "0"))
+                    views = int(stat.attrib.get("views", ""))
                 except ValueError:
-                    views = 0
+                    views = None
         link = entry.find("atom:link", NS)
         href = link.attrib.get("href", "") if link is not None else ""
         out.append({
@@ -150,9 +150,18 @@ def fetch_feed(channel_id: str) -> tuple[str, list[dict]]:
     return title, out
 
 
-def is_short(video_id: str) -> bool:
+def is_short(video_id: str) -> bool | None:
+    """쇼츠면 True, 일반 영상(쇼츠 주소가 /watch로 넘어감)이면 False, 판별 못 하면 None.
+
+    예전엔 200이 아니면 모두 False라, 일시 장애(503 등)로 한 번 False가 저장되면 그 뒤로는
+    저장된 값을 재사용해 다시 검사하지 않았다.
+    """
     status, _ = http_get(f"https://www.youtube.com/shorts/{video_id}", allow_redirect=False, timeout=10)
-    return status == 200
+    if status == 200:
+        return True
+    if 300 <= status < 400:
+        return False
+    return None
 
 
 def api_get(path: str, **params) -> dict:
@@ -236,11 +245,11 @@ def api_uploads(playlist_id: str, max_pages: int) -> list[dict]:
 
 
 def iso_duration_sec(text: str) -> int:
-    match = re.fullmatch(r"P(?:\d+D)?T?(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", str(text or ""))
+    match = re.fullmatch(r"P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", str(text or ""))
     if not match:
         return 0
-    h, minute, sec = (int(x) if x else 0 for x in match.groups())
-    return h * 3600 + minute * 60 + sec
+    d, h, minute, sec = (int(x) if x else 0 for x in match.groups())
+    return d * 86400 + h * 3600 + minute * 60 + sec
 
 
 def api_stats(ids: list[str]) -> dict[str, tuple[int, int]]:
@@ -250,9 +259,9 @@ def api_stats(ids: list[str]) -> dict[str, tuple[int, int]]:
         data = api_get("videos", part="statistics,contentDetails", id=",".join(chunk), maxResults=50)
         for item in data.get("items") or []:
             try:
-                views = int((item.get("statistics") or {}).get("viewCount", 0))
-            except (TypeError, ValueError):
-                views = 0
+                views = int((item.get("statistics") or {})["viewCount"])
+            except (KeyError, TypeError, ValueError):
+                views = None  # 조회수 비공개·형식 오류: 기존 값 유지
             duration = iso_duration_sec((item.get("contentDetails") or {}).get("duration"))
             out[item["id"]] = (views, duration)
     return out
@@ -271,7 +280,12 @@ def collect_channel(url: str, cached: dict | None, archived_count: int, *, full:
             stats = api_stats([item["id"] for item in items])
             videos: list[dict] = []
             for item in items:
-                views, seconds = stats.get(item["id"], (0, 0))
+                if item["id"] not in stats:
+                    # 상세 응답에 빠진 영상: 조회수·길이를 모른다. 0으로 덮어쓰지 않고(views=None →
+                    # 저장 때 기존 값 유지) 쇼츠 여부는 따로 판별한다.
+                    videos.append({**item, "views": None, "short": None})
+                    continue
+                views, seconds = stats[item["id"]]
                 videos.append({
                     **item,
                     "views": views,
@@ -290,6 +304,8 @@ def collect_channel(url: str, cached: dict | None, archived_count: int, *, full:
 
 
 def resolve_short_flags(items: list[dict], previous: dict[str, dict]) -> list[dict]:
+    """쇼츠 여부를 정한다. 판별하지 못한 새 영상은 이번에는 저장하지 않는다(False로 굳지 않게) -
+    다음 실행에서 다시 판별한다. 이미 저장된 영상은 그 값을 쓴다."""
     resolved: list[dict] = []
     for item in items:
         prev = previous.get(item["id"], {})
@@ -299,5 +315,7 @@ def resolve_short_flags(items: list[dict], previous: dict[str, dict]) -> list[di
         if short is None:
             short = is_short(item["id"])
             time.sleep(DELAY)
+        if short is None:
+            continue
         resolved.append({**item, "short": bool(short)})
     return resolved

@@ -72,7 +72,9 @@ def upsert_collected_videos(channel_url: str, items: list[dict], existing: dict[
             "title": str(item.get("title") or ""),
             "published": item.get("published") or None,
             "thumb": item.get("thumb") or None,
-            "views": int(item.get("views") or 0),
+            # 조회수를 모르면(None) 지금 저장된 값을 그대로 둔다(0으로 덮어쓰지 않음)
+            "views": int(item["views"]) if item.get("views") is not None
+            else int((existing.get(video_id) or {}).get("views") or 0),
             "short": bool(item.get("short")),
             "updated_at": now,
         })
