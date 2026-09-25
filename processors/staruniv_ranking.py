@@ -95,6 +95,7 @@ import argparse
 import bisect
 import datetime as dt
 import io
+import re
 import json
 import math
 import os
@@ -255,10 +256,10 @@ def load_ladders(path, players):
     8티어였던 사람의 작년 점수를 지금 7티어 기준선으로 재던 셈이라, 승급한 사람의
     선이 과거까지 통째로 들려 올라갔다. 승급일이 있으면 그 달의 티어로 되돌릴 수 있다.
 
-    원본이 깨끗하지 않아 두 부류는 아예 손대지 않고 오늘의 티어를 그대로 쓴다:
-      - 날짜순으로 티어가 도로 내려가는 사다리(강등이거나 오기, 54명)
-      - 사다리 마지막 티어가 지금 티어와 다른 사람(기록 안 된 승급이 있다, 47명)
-    둘 다 '언제 바뀌었는지'를 알 수 없어서, 고치려 들면 오히려 없는 정보를 지어낸다.
+    'N티어 승급' 칸은 그 티어가 된 날짜다. 강등으로 내려간 날짜도 같은 칸에 적으므로(여러 번이면
+    쉼표로 이어 적는다) 날짜순으로 티어가 도로 내려가는 사다리도 그대로 쓴다.
+    사다리 마지막 티어가 지금 티어와 다른 사람만 오늘의 티어를 그대로 쓴다(기록 안 된 변동이 있어
+    '언제 바뀌었는지'를 알 수 없고, 고치려 들면 오히려 없는 정보를 지어낸다).
 
     반환: 선수id -> [(날짜, 티어), ...] (날짜 오름차순). 여기 없으면 오늘 티어를 쓴다.
     """
@@ -268,7 +269,7 @@ def load_ladders(path, players):
     rows = (load_json(path) or {}).get('tierMembers') or []
     cols = [(str(i), f'{i}티어 승급') for i in range(9)]
     out = {}
-    skipped_order = skipped_mismatch = 0
+    skipped_mismatch = 0
     for m in rows:
         pid = str(m.get('ELO ID') or '').strip()
         entry = players.get(pid)
@@ -276,14 +277,16 @@ def load_ladders(path, players):
             continue
         events = []
         for tier, col in cols:
-            day = str(m.get(col) or '').strip()[:10]
-            if not day:
-                continue
-            try:
-                dt.date.fromisoformat(day)
-            except ValueError:
-                continue
-            events.append((day, tier))
+            # 한 칸에 날짜가 여럿일 수 있다(강등 뒤 다시 그 티어가 됨: '2021-07-13, 2021-10-26')
+            for day in re.split(r'[,\s/]+', str(m.get(col) or '').strip()):
+                day = day[:10]
+                if not day:
+                    continue
+                try:
+                    dt.date.fromisoformat(day)
+                except ValueError:
+                    continue
+                events.append((day, tier))
         if not events:
             continue
         # 같은 날 두 티어가 적힌 경우가 있다(티어표 첫 등재분). 더 센 쪽을 남긴다.
@@ -293,16 +296,13 @@ def load_ladders(path, players):
             if merged and merged[-1][0] == day:
                 continue
             merged.append((day, tier))
-        nums = [int(t) for _, t in merged]
-        if nums != sorted(nums, reverse=True):
-            skipped_order += 1
-            continue
         if merged[-1][1] != tier_of(entry):
             skipped_mismatch += 1
             continue
         out[pid] = merged
-    print(f'   승급일 사다리 {len(out):,}명 사용 '
-          f'(티어가 도로 내려감 {skipped_order}명 · 지금 티어와 어긋남 {skipped_mismatch}명 제외)')
+    demoted = sum(1 for lad in out.values()
+                  if [int(t) for _, t in lad] != sorted((int(t) for _, t in lad), reverse=True))
+    print(f'   승급일 사다리 {len(out):,}명 사용(강등 포함 {demoted}명) · 지금 티어와 어긋남 {skipped_mismatch}명 제외')
     return out
 
 

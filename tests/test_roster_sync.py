@@ -171,3 +171,23 @@ def test_ranking_links_tier_players_by_elo_id_only():
     linked, missing = link_tier_players(players, members)
     assert list(linked) == ['775']
     assert missing == ['노아이디']
+
+
+def test_ladder_keeps_demotions_and_every_date_in_a_cell(tmp_path):
+    """'N티어 승급' 칸은 그 티어가 된 날(강등 포함). 한 칸의 날짜 여러 개도 모두 쓴다."""
+    import datetime as dt
+    import json
+    from processors.staruniv_ranking import load_ladders, tier_at
+    db = tmp_path / 'db.json'
+    db.write_text(json.dumps({'tierMembers': [
+        # 8 → 7(3월) → 8로 강등(6월) → 다시 7(9월)
+        {'ELO ID': 1, '8티어 승급': '2025-01-01, 2025-06-01', '7티어 승급': '2025-03-01, 2025-09-01'},
+        # 6 → 7로 강등(날짜 하나뿐)
+        {'ELO ID': 2, '6티어 승급': '2025-01-01', '7티어 승급': '2025-05-01'},
+    ]}, ensure_ascii=False), encoding='utf-8')
+    players = {'1': {'t': '7'}, '2': {'t': '7'}}
+    lad = load_ladders(str(db), players)
+    assert lad['1'] == [('2025-01-01', '8'), ('2025-03-01', '7'), ('2025-06-01', '8'), ('2025-09-01', '7')]
+    assert tier_at('1', dt.date(2025, 7, 1), lad, players) == '8'
+    assert tier_at('2', dt.date(2025, 3, 1), lad, players) == '6'
+    assert tier_at('2', dt.date(2025, 6, 1), lad, players) == '7'
