@@ -36,9 +36,9 @@ python scripts/run_job.py audit_match_rounds
 
 ## DB 적용
 
-`migrations/001_*.sql`부터 번호 순서대로 같은 Supabase 프로젝트에 적용합니다. 웹 공개 뷰와 권한도 이 저장소의 migration에서만 관리합니다.
-
-현재 일별 통계 게시 코드는 `008_atomic_daily_publish.sql`의 RPC를 요구하며, StarUniv/Synergy 공개 조회는 `009_public_web_views.sql`, 어드민 통합 현황은 `010_admin_dashboard.sql`을 요구합니다. 티어랭킹 v4(모든 선수 레이팅·종족 상성 공개)는 `011_player_ratings_race_matchup.sql`을 요구하므로, 이 마이그레이션을 먼저 적용한 뒤 코드를 배포합니다.
+`supabase/ststat.sql` 한 파일을 Supabase SQL 편집기에 붙여 넣고 실행합니다(여러 번 실행해도 됩니다).
+StarUniv 기본 표를 만드는 staruniv 저장소 `supabase/staruniv.sql`을 먼저 실행해 둬야 합니다.
+파이프라인 표, 파생 통계, 공개 조회 뷰와 권한은 모두 이 파일에서만 관리합니다. 스키마를 바꾸는 코드는 이 파일을 먼저 실행한 뒤 배포합니다.
 
 ## 운영 메모
 

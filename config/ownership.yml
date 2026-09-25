@@ -104,11 +104,9 @@ synergy_daily_stats:
     - daily_member_stats
     - synergy_month_confirmations
   protected_behavior:
-    - "Synergy legacy latest.json/archive remain active during Part 5 validation."
     - "Sponsor stats are calculated from the centralized elo_matches table; EloBoard is not fetched a second time."
     - "A Poonggo partial/undersized response aborts the snapshot write."
     - "tier_members.modified_at is cleared only after historical daily_member_stats metadata backfill succeeds."
-    - "No StarUniv/Synergy web read path is changed in Part 5."
 
 
 video_collection:
