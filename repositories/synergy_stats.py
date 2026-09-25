@@ -299,3 +299,78 @@ def update_closed_month_numeric_stats(
             "sponsor_updated_at": now,
         })
     return upsert_daily_snapshot(stat_date, rows)
+
+
+def snapshot_dates_between(from_date: str, to_date: str) -> list[str]:
+    """[from_date, to_date] 안에서 이미 게시된 방송통계 날짜(오름차순)."""
+    db = get_supabase()
+    out: list[str] = []
+    start = 0
+    while True:
+        rows = (
+            db.table("synergy_daily_dates")
+            .select("stat_date")
+            .gte("stat_date", from_date)
+            .lte("stat_date", to_date)
+            .order("stat_date")
+            .range(start, start + PAGE_SIZE - 1)
+            .execute()
+            .data
+            or []
+        )
+        out.extend(str(r["stat_date"])[:10] for r in rows)
+        if len(rows) < PAGE_SIZE:
+            return out
+        start += PAGE_SIZE
+
+
+def _cumulative_sponsor(matches: list[dict], days: list[str]) -> dict[str, dict[int, tuple[int, int]]]:
+    """한 달 경기로 날짜마다 '월초~그날' 누적 (승, 패)를 만든다(게시 때와 같은 기준)."""
+    ordered = sorted(matches, key=lambda r: str(r.get("match_date") or ""))
+    wins: dict[int, int] = defaultdict(int)
+    losses: dict[int, int] = defaultdict(int)
+    out: dict[str, dict[int, tuple[int, int]]] = {}
+    i = 0
+    for day in sorted(days):
+        while i < len(ordered) and str(ordered[i].get("match_date") or "")[:10] <= day:
+            w, l = ordered[i].get("winner_elo_id"), ordered[i].get("loser_elo_id")
+            if w is not None:
+                wins[int(w)] += 1
+            if l is not None:
+                losses[int(l)] += 1
+            i += 1
+        out[day] = {pid: (wins[pid], losses[pid]) for pid in set(wins) | set(losses)}
+    return out
+
+
+def refresh_sponsor_stats(from_date: str, to_date: str) -> dict:
+    """이미 게시된 날들의 스폰 승패를 지금의 elo_matches 기준으로 다시 맞춘다.
+
+    경기가 늦게 등록·정정되거나 선수의 ELO ID가 소급 수정되면 지난 날의 스폰 승패가
+    원본과 어긋난다(월말 확정된 달도 마찬가지). 바뀐 행이 있는 날만 하루 단위로 통째로
+    다시 게시한다(publish_daily_member_stats RPC - 원자적). 별풍선 등 다른 값은 그대로 둔다.
+    """
+    days = snapshot_dates_between(from_date, to_date)
+    by_month: dict[str, list[str]] = defaultdict(list)
+    for day in days:
+        by_month[day[:7]].append(day)
+    changed_days: list[str] = []
+    changed_rows = 0
+    now = datetime.now(timezone.utc).isoformat()
+    for ym in sorted(by_month):
+        month_days = by_month[ym]
+        totals = _cumulative_sponsor(_paged_matches(f"{ym}-01", max(month_days)), month_days)
+        for day in month_days:
+            rows = load_daily_snapshot_rows(day)
+            diff = 0
+            for row in rows:
+                eid = row.get("elo_id")
+                w, l = totals[day].get(int(eid), (0, 0)) if eid is not None else (0, 0)
+                if (row.get("sponsor_wins"), row.get("sponsor_losses")) != (w, l):
+                    row.update({"sponsor_wins": w, "sponsor_losses": l, "sponsor_updated_at": now})
+                    diff += 1
+            if diff:
+                upsert_daily_snapshot(day, rows)
+                changed_days.append(day)
+                changed_rows += diff
+    return {"days_checked": len(days), "days_changed": changed_days[:60], "rows_changed": changed_rows}

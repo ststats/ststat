@@ -116,6 +116,25 @@ def load_match_ids_between(start_date: str, end_date: str) -> set[int]:
     return out
 
 
+def load_match_rows(ids: set[int]) -> list[dict]:
+    """지우기 직전 원본 행(되살리기용 기록)."""
+    if not ids:
+        return []
+    db = get_supabase()
+    values = sorted(ids)
+    out: list[dict] = []
+    for start in range(0, len(values), 200):
+        out.extend(
+            db.table("elo_matches")
+            .select("elo_match_id,match_date,winner_elo_id,loser_elo_id,map_id,category_id")
+            .in_("elo_match_id", values[start:start + 200])
+            .execute()
+            .data
+            or []
+        )
+    return out
+
+
 def delete_match_ids(ids: set[int]) -> int:
     if not ids:
         return 0

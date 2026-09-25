@@ -33,3 +33,6 @@ jobs:
           # EloBoard 요청: 페이지 사이 2초 간격을 지킨다(줄이지 말 것)
           ELOBOARD_DELAY: "2.0"
         run: python scripts/run_job.py sync_eloboard
+      # 되살린 경기를 지난 방송통계의 스폰 승패에도 반영한다(바뀐 날만 다시 게시)
+      - name: Recount past Synergy sponsor stats
+        run: python scripts/run_job.py refresh_synergy_sponsor

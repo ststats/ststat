@@ -24,6 +24,18 @@ def test_match_parser_rejects_bad_participants():
     assert EloMatch.from_api({"id": 1, "played_on": "2026-09-22", "participants": []}) is None
 
 
+def test_match_parser_rejects_bad_dates_and_self_matches():
+    base = {"id": 5, "played_on": "2026-09-22", "participants": [
+        {"player_id": 1, "result": "win"}, {"player_id": 2, "result": "loss"}]}
+    assert EloMatch.parse(base, max_date="2026-09-25")[0] is not None
+    assert EloMatch.parse({**base, "played_on": "INVALID"})[1] == "bad_date"
+    assert EloMatch.parse({**base, "played_on": "2026-02-30"})[1] == "bad_date"
+    assert EloMatch.parse({**base, "played_on": "2026-12-01"}, max_date="2026-09-25")[1] == "date_out_of_range"
+    assert EloMatch.parse({**base, "id": 0})[1] == "bad_id"
+    same = {**base, "participants": [{"player_id": 3, "result": "win"}, {"player_id": 3, "result": "loss"}]}
+    assert EloMatch.parse(same)[1] == "same_player"
+
+
 def _row(match_id, played_on, winner=1, loser=2):
     return {
         "id": match_id, "played_on": played_on, "map_id": 7, "map_name": "Polypoid",
@@ -98,6 +110,7 @@ def _setup_sync(monkeypatch, pages, stop_at, db_window_ids, backfill=False, prev
     monkeypatch.setattr(job, "load_match_ids_between", window)
     monkeypatch.setattr(job, "delete_match_ids", lambda ids: (saved.setdefault("deleted", sorted(ids)) and len(ids)) if ids else 0)
     monkeypatch.setattr(job, "load_previous_pending_deletes", lambda: set(previous_pending))
+    monkeypatch.setattr(job, "load_match_rows", lambda ids: [{"elo_match_id": i} for i in sorted(ids)])
 
     class FixedDateTime(dt.datetime):
         @classmethod
@@ -146,3 +159,40 @@ def test_full_backfill_reads_everything_and_never_deletes(monkeypatch):
     assert saved["ids"] == [10, 20, 3000]
     assert "deleted" not in saved and "range" not in asked
     assert result.metadata["delete_skipped"] == "full_backfill"
+
+
+def test_late_registered_old_match_with_bigger_id_is_saved_and_never_deleted(monkeypatch):
+    """목록은 날짜순이라 지난 날짜로 늦게 등록된 경기는 뒤 페이지에 있고 ID가 더 크다.
+    예전엔 첫 페이지 최대 ID(100)보다 큰 999를 건너뛰어 저장하지 않고, 삭제 대상으로까지 봤다."""
+    pages = [[_row(100, "2026-09-24")], [_row(999, "2026-09-10"), _row(50, "2026-08-20")]]
+    job, saved, _ = _setup_sync(monkeypatch, pages, stop_at=100, db_window_ids={100, 999},
+                                previous_pending={999})
+    result = job.run()
+    assert 999 in saved["ids"]
+    assert "deleted" not in saved
+    assert result.metadata["pending_delete"] == []
+
+
+def test_full_backfill_keeps_late_registered_bigger_ids(monkeypatch):
+    pages = [[_row(100, "2026-09-24")], [_row(999, "2024-01-10")]]
+    job, saved, _ = _setup_sync(monkeypatch, pages, stop_at=100, db_window_ids=set(), backfill=True)
+    job.run()
+    assert saved["ids"] == [100, 999]
+
+
+def test_deleted_rows_are_recorded_before_deletion(monkeypatch):
+    pages = [[_row(3000, "2026-09-23")]]
+    job, saved, _ = _setup_sync(monkeypatch, pages, stop_at=3000, db_window_ids={3000, 2500},
+                                previous_pending={2500})
+    result = job.run()
+    assert saved["deleted"] == [2500]
+    assert result.metadata["deleted_rows"] == [{"elo_match_id": 2500}]
+
+
+def test_invalid_rows_are_counted_with_reasons_and_not_saved(monkeypatch):
+    bad = _row(2990, "INVALID")
+    pages = [[_row(3000, "2026-09-23"), *[_row(2900 + i, "2026-09-20") for i in range(30)], bad]]
+    job, saved, _ = _setup_sync(monkeypatch, pages, stop_at=3000, db_window_ids={3000})
+    result = job.run()
+    assert 2990 not in saved["ids"]
+    assert {"id": 2990, "reason": "bad_date"} in result.metadata["invalid_samples"]

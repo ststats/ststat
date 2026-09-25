@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 from collectors.poonggo import fetch_monthly
 from models.sync_job import JobResult
 from processors.synergy_daily import build_daily_rows
+from jobs.sync_eloboard import rescan_cutoff
 from repositories.synergy_stats import (
     aggregate_sponsor_stats,
     apply_roster_backfill,
@@ -15,6 +16,7 @@ from repositories.synergy_stats import (
     get_month_confirmation,
     load_roster_for_synergy,
     load_snapshot_roster,
+    refresh_sponsor_stats,
     upsert_daily_snapshot,
     upsert_month_confirmation,
     upsert_poonggo_month,
@@ -40,6 +42,13 @@ def _month_end(month_start: date) -> date:
     return date(month_start.year, month_start.month, calendar.monthrange(month_start.year, month_start.month)[1])
 
 
+def _marker_date(marker: str | None) -> str | None:
+    try:
+        return date.fromisoformat(str(marker or "")[:10]).isoformat()
+    except ValueError:
+        return None
+
+
 def _require_poonggo_coverage(roster, poonggo, label: str) -> None:
     # fetch_monthly는 정상 응답에서 생략된 무방송 ID를 0으로 채운다. 따라서 여기서의
     # 누락은 호출자가 불완전한 결과를 넘겼거나 수집기 계약이 깨진 경우만 뜻한다.
@@ -60,11 +69,15 @@ def _confirm_closed_months(today: date) -> dict:
     checked = 0
     confirmed = 0
     poonggo_rows = 0
+    missing_month_end: list[str] = []
     month = _previous_month(today)
     for _ in range(MAX_CONFIRM_MONTHS_PER_RUN):
         last_day = _month_end(month)
         last_day_str = last_day.isoformat()
         if existing_snapshot_count(last_day_str) == 0:
+            # 월말 당일 게시가 빠진 달은 확정할 수 없다. 조용히 넘기지 않고 작업 기록에 남긴다.
+            if not get_month_confirmation(month.isoformat()).get("poonggo_complete"):
+                missing_month_end.append(last_day_str)
             month = _previous_month(month)
             continue
 
@@ -109,7 +122,8 @@ def _confirm_closed_months(today: date) -> dict:
         confirmed += 1
         month = _previous_month(month)
 
-    return {"checked": checked, "confirmed": confirmed, "poonggo_rows": poonggo_rows}
+    return {"checked": checked, "confirmed": confirmed, "poonggo_rows": poonggo_rows,
+            "missing_month_end": missing_month_end}
 
 
 def run() -> JobResult:
@@ -149,6 +163,15 @@ def run() -> JobResult:
         corrected_rows += apply_roster_backfill(member, modified_date)
         corrected_members[member.soop_id] = member.modified_at
 
+    # 지난 날의 스폰 승패를 지금 경기 기록에 다시 맞춘다: EloBoard가 다시 읽는 범위(이번 달, 월초엔
+    # 지난달부터)에서는 늦게 등록·정정된 경기가 들어올 수 있고, ELO ID를 소급 수정한 선수는 그
+    # 날짜부터 새 ID 기준으로 다시 세야 한다. 바뀐 날만 다시 게시한다.
+    refresh_from = rescan_cutoff(today)
+    backfill_dates = [d for d in (_marker_date(m.modified_at) for m in roster if m.modified_at) if d]
+    if backfill_dates:
+        refresh_from = min([refresh_from, *backfill_dates])
+    sponsor_refresh = refresh_sponsor_stats(refresh_from, (today - timedelta(days=1)).isoformat())
+
     # Clear markers only after all affected member backfills have succeeded.
     cleared = clear_modified_at(corrected_members) if corrected_members else 0
 
@@ -171,6 +194,9 @@ def run() -> JobResult:
             "modified_at_cleared": cleared,
             "closed_months_checked": confirmations["checked"],
             "closed_months_confirmed": confirmations["confirmed"],
+            "missing_month_end_snapshots": confirmations["missing_month_end"],
+            "sponsor_refresh_from": refresh_from,
+            "sponsor_refresh": sponsor_refresh,
             "atomic_daily_publish": True,
         },
     )
