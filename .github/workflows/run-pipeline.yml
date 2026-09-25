@@ -25,7 +25,11 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt
       - run: python scripts/run_job.py healthcheck
-      - run: python scripts/run_job.py sync_roster
+      # 명단 동기화가 실패해도 지금 DB에 있는 명단으로 뒤 작업(경기 수집·파생·시너지)을 계속한다.
+      # 실패는 sync_jobs와 Actions 경고로 남는다. 연결·스키마 점검(healthcheck) 실패는 그대로 멈춘다.
+      - name: Sync roster
+        continue-on-error: true
+        run: python scripts/run_job.py sync_roster
 
   eloboard:
     needs: foundation

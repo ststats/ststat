@@ -111,7 +111,9 @@ def run_staruniv_algorithm(source: dict, processor_dir: Path,
             _write_json(root / 'docs/data/h2h/rating.json', history_cache)
 
         subprocess.run(
-            [sys.executable, str(processor_dir / 'staruniv_h2h.py'), '--src', str(root / 'data/eloboard.json')],
+            # 파생 계산은 index.json만 읽는다(선수별 경기 파일은 옛 정적 사이트용이라 만들지 않는다)
+            [sys.executable, str(processor_dir / 'staruniv_h2h.py'), '--src', str(root / 'data/eloboard.json'),
+             '--index-only'],
             cwd=root, check=True,
         )
         ranking_cmd = [

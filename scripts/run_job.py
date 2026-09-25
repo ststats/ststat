@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from importlib import import_module
@@ -42,6 +43,18 @@ def close_stale_runs(db, job_name: str):
         print(f"stale sync_jobs cleanup skipped: {exc}", file=sys.stderr)
 
 
+def record(db, sync_job_id, fields: dict, attempts: int = 3) -> bool:
+    """sync_jobs 기록. 일시 오류는 몇 번 다시 시도하고, 끝내 실패하면 False(예외를 내지 않는다)."""
+    for attempt in range(attempts):
+        try:
+            db.table("sync_jobs").update(fields).eq("id", sync_job_id).execute()
+            return True
+        except Exception as exc:
+            print(f"sync_jobs record failed ({attempt + 1}/{attempts}): {exc}", file=sys.stderr)
+            time.sleep(2 * (attempt + 1))
+    return False
+
+
 def main():
     if len(sys.argv) != 2:
         raise SystemExit("Usage: python scripts/run_job.py <job_name>")
@@ -64,28 +77,32 @@ def main():
 
     sync_job_id = inserted.data[0]["id"]
 
+    # 작업 실행과 기록을 나눈다: 게시까지 끝난 작업이 '성공 기록' 실패 때문에 실패로 남지 않게,
+    # 실패 기록이 또 실패해도 원래 오류가 가려지지 않게 한다.
     try:
         module = import_module(f"jobs.{job_name}")
         result = module.run()
-
-        db.table("sync_jobs").update({
-            "status": "success",
-            "finished_at": utc_now(),
-            "records_read": result.records_read,
-            "records_written": result.records_written,
-            "records_skipped": result.records_skipped,
-            "source_cursor": result.source_cursor,
-            "metadata": result.metadata,
-        }).eq("id", sync_job_id).execute()
-
     except Exception as exc:
-        db.table("sync_jobs").update({
+        record(db, sync_job_id, {
             "status": "failed",
             "finished_at": utc_now(),
             "error_message": str(exc)[:5000],
-        }).eq("id", sync_job_id).execute()
-
+        })
         raise
+
+    ok = record(db, sync_job_id, {
+        "status": "success",
+        "finished_at": utc_now(),
+        "records_read": result.records_read,
+        "records_written": result.records_written,
+        "records_skipped": result.records_skipped,
+        "source_cursor": result.source_cursor,
+        "metadata": result.metadata,
+    })
+    if not ok:
+        # 데이터는 이미 반영됐다. 행은 'running'으로 남고 다음 실행에서 3시간 뒤 실패로 닫힌다.
+        # (sync_eloboard의 pending_delete도 이 기록에 실리므로, 이 경우 삭제 판정이 한 번 늦어질 뿐이다)
+        print(f"::warning::{job_name} finished but its success record could not be saved", file=sys.stderr)
 
 
 if __name__ == "__main__":

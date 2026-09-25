@@ -206,6 +206,8 @@ def main():
     ap = argparse.ArgumentParser(description='상대전적 데이터 만들기')
     ap.add_argument('--offline', action='store_true', help='시너지 명단 없이 만든다(로컬 테스트)')
     ap.add_argument('--src', default=SRC_PATH, help=f'원본 아카이브 경로 (기본 {SRC_PATH})')
+    ap.add_argument('--index-only', action='store_true',
+                    help='선수별 경기 파일(p/*.json)을 만들지 않고 index.json만 쓴다(파생 통계 계산용)')
     args = ap.parse_args()
 
     store = load_json(args.src)
@@ -302,7 +304,7 @@ def main():
     # 샤드 파일 이름 = 그 샤드에서 가장 작은 선수id (프론트엔드가 shardBounds로 어느
     # 파일을 받을지 계산한다 - 고정 폭이 아니므로 계산식이 아니라 목록으로 넘긴다).
     shard_bounds = []
-    for entries in build_shards(per_sorted):
+    for entries in ([] if args.index_only else build_shards(per_sorted)):
         start_pid = min(entries, key=_pid_sort_key)
         shard_bounds.append(_pid_num(start_pid) if _pid_num(start_pid) is not None else start_pid)
         write_json(os.path.join(tmp_players, f'{start_pid}.json'), entries)

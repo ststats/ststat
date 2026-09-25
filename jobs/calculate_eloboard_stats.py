@@ -26,6 +26,13 @@ def run() -> JobResult:
         timings[name] = round(now - started, 1)
         started = now
 
+    # 지난 실행이 실패로 남긴 스냅샷·오래된 building도 먼저 정리한다(게시가 계속 실패해도 쌓이지 않게).
+    # 활성 스냅샷은 건드리지 않는다. 정리 실패는 계산을 막지 않는다.
+    try:
+        cleanup_old_snapshots(keep=1)
+    except Exception as exc:
+        print(f"pre-run snapshot cleanup skipped: {exc}")
+
     source = load_source_data()
     lap('load_seconds')
     match_count = len(source['matches'])
