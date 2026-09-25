@@ -995,4 +995,8 @@ def main():
 
 
 if __name__ == '__main__':
+    # ✅·ℹ️ 같은 글자를 출력한다. Windows 기본 인코딩(cp949)에서는 출력만으로 죽으므로 UTF-8로 고정한다.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, 'reconfigure'):
+            stream.reconfigure(encoding='utf-8', errors='replace')
     sys.exit(main())
