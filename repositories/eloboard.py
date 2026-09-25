@@ -86,31 +86,6 @@ def upsert_matches(matches: list[EloMatch]) -> int:
     return len(payload)
 
 
-def load_match_ids_from(min_id: int) -> set[int]:
-    if min_id <= 0:
-        return set()
-    db = get_supabase()
-    out: set[int] = set()
-    start = 0
-    page = 1000
-    while True:
-        rows = (
-            db.table("elo_matches")
-            .select("elo_match_id")
-            .gte("elo_match_id", min_id)
-            .order("elo_match_id")
-            .range(start, start + page - 1)
-            .execute()
-            .data
-            or []
-        )
-        out.update(int(r["elo_match_id"]) for r in rows)
-        if len(rows) < page:
-            break
-        start += page
-    return out
-
-
 def load_match_ids_between(start_date: str, end_date: str) -> set[int]:
     """경기 날짜가 [start_date, end_date]인 저장된 경기 ID.
 

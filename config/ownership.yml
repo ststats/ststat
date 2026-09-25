@@ -43,10 +43,9 @@ eloboard:
     - elo_players
     - elo_matches
   behavior:
-    - "Incremental collection starts from the newest DB match id and re-reads a 3-day overlap window."
+    - "Each run re-reads from the 1st of this month (1st-7th: from the 1st of last month); matches missing twice in a row inside that window are deleted (max 2% / 50)."
     - "Partial/failed fetches never write matches or delete existing rows."
     - "Unknown elo_ids are staged in tier_member_candidates and never auto-added to tier_members."
-    - "H2H/ranking/race calculations remain out of scope until Part 4."
 
 staruniv_admin:
   owner: staruniv_admin
@@ -86,14 +85,12 @@ derived_eloboard_stats:
     - elo_rating_history
   rules:
     - "Derived stats are written as a new snapshot and activated only after the full calculation succeeds."
-    - "The current StarUniv H2H/ranking algorithm is preserved during migration."
-    - "StarUniv legacy h2h/ranking JSON remains fallback until the web migration step."
     - "This job never updates tier_members or realtime broadcast fields."
 
 synergy_daily_stats:
   owner: ststat
   executor: external_cron_to_github_actions
-  cadence: "after calculate_eloboard_stats (normally every 4 hours)"
+  cadence: "after sync_eloboard, in parallel with calculate_eloboard_stats (normally every 4 hours)"
   external_source:
     - poonggo_monthly_api
   source_tables:
@@ -112,7 +109,7 @@ synergy_daily_stats:
 video_collection:
   owner: ststat
   executor: external_cron_to_github_actions
-  cadence: "after synergy daily stats (normally every 4 hours)"
+  cadence: "independent job in the same pipeline run (normally every 4 hours)"
   sources:
     - youtube_data_api_v3
     - youtube_rss_fallback

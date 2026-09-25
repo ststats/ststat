@@ -37,6 +37,9 @@ def history_cache_metadata(source: dict) -> dict:
         digest.update(('|'.join('' if v is None else str(v) for v in fields) + '\n').encode())
     for row in source.get('categories', []):
         digest.update(f"{row.get('category_id')}|{row.get('name') or ''}\n".encode())
+    # 선수 종족은 종족 상성 항에 들어가 지난 달 레이팅도 바꾼다(종족 정정 시 캐시를 버려야 한다)
+    for row in sorted(source.get('players', []), key=lambda r: int(r['elo_id'])):
+        digest.update(f"p|{row.get('elo_id')}|{row.get('race') or ''}\n".encode())
     return {
         'history_cache_version': RANKING_HISTORY_CACHE_VERSION,
         'closed_history_fingerprint': digest.hexdigest(),

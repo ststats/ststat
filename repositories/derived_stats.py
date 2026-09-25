@@ -182,12 +182,12 @@ def _insert_chunk(table: str, payload: list[dict]):
 def _insert(table: str, rows: list[dict], snapshot_id: str, chunk: int = WRITE_CHUNK):
     """'building' 스냅샷에 넣는 것이라 순서가 상관없어 조각들을 동시에 보낸다.
     하나라도 실패하면 예외가 올라가 스냅샷이 실패로 표시되고 활성화되지 않는다."""
-    chunks = [
-        [dict(r, snapshot_id=snapshot_id) for r in rows[i:i + chunk]]
-        for i in range(0, len(rows), chunk)
-    ]
+    def send(start):
+        # snapshot_id를 붙인 사본은 보낼 조각만 그때 만든다(표 전체 사본을 미리 들고 있지 않게)
+        _insert_chunk(table, [dict(r, snapshot_id=snapshot_id) for r in rows[start:start + chunk]])
+
     with ThreadPoolExecutor(WRITE_WORKERS) as pool:
-        for future in [pool.submit(_insert_chunk, table, payload) for payload in chunks]:
+        for future in [pool.submit(send, i) for i in range(0, len(rows), chunk)]:
             future.result()
     return len(rows)
 

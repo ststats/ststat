@@ -50,6 +50,30 @@ def test_history_cache_ignores_current_month_matches_but_not_closed_months():
     assert original["closed_history_fingerprint"] != closed_changed["closed_history_fingerprint"]
 
 
+def test_history_cache_changes_for_every_input_that_moves_closed_months():
+    """지난 달 레이팅을 바꾸는 입력(경기·티어·승급일·경기 분류·선수 종족)이 바뀌면 지문도 바뀐다."""
+    def fp(mutate=None):
+        src = _source()
+        src["players"] = [{"elo_id": 1, "race": "T"}, {"elo_id": 2, "race": "Z"}]
+        src["categories"] = [{"category_id": 4, "name": "리그"}]
+        if mutate:
+            mutate(src)
+        return history_cache_metadata(src)["closed_history_fingerprint"]
+
+    base = fp()
+    changes = {
+        "race": lambda s: s["players"][1].update(race="P"),
+        "tier": lambda s: s["tier_members"][0].update(tier="2"),
+        "promotion": lambda s: s["tier_members"][0].update(promoted_tier_1="2026-01-01"),
+        "category": lambda s: s["categories"][0].update(name="미니"),
+        "closed_match": lambda s: s["matches"][0].update(map_id=9),
+    }
+    for name, mutate in changes.items():
+        assert fp(mutate) != base, name
+    # 같은 입력은 순서가 달라도 같은 지문
+    assert fp(lambda s: s["players"].reverse()) == base
+
+
 def test_monotone_levels_pool_inverted_tier_centers():
     levels = monotone_tier_levels([3.0, 2.0, 2.5, 1.0], [10, 10, 10, 10])
     assert np.all(levels[:-1] >= levels[1:])

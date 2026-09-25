@@ -36,16 +36,6 @@ def _previous_month(d: date) -> date:
     return (first - timedelta(days=1)).replace(day=1)
 
 
-def _iter_months(start: date, end_exclusive: date):
-    cur = start
-    while cur < end_exclusive:
-        yield cur
-        if cur.month == 12:
-            cur = date(cur.year + 1, 1, 1)
-        else:
-            cur = date(cur.year, cur.month + 1, 1)
-
-
 def _month_end(month_start: date) -> date:
     return date(month_start.year, month_start.month, calendar.monthrange(month_start.year, month_start.month)[1])
 

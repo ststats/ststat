@@ -4,7 +4,7 @@ import datetime as dt
 import os
 import time
 
-from collectors.eloboard import DEFAULT_DELAY, PAGE_LIMIT, PAGE_STEP, fetch_page
+from collectors.eloboard import DEFAULT_DELAY, PAGE_STEP, fetch_page
 from models.eloboard import EloMatch
 from models.sync_job import JobResult
 from repositories.eloboard import (
