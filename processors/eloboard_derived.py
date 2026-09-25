@@ -106,7 +106,6 @@ def run_staruniv_algorithm(source: dict, processor_dir: Path,
         store = make_legacy_store(source)
         _write_json(root / 'data/eloboard.json', store)
         _write_json(root / 'data/db.json', {'tierMembers': [_tier_member_legacy(r) for r in source['tier_members']]})
-        _write_json(root / 'data/h2h_alias.json', {})
         if history_cache:
             _write_json(root / 'docs/data/h2h/rating.json', history_cache)
 

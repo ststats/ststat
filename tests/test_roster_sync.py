@@ -160,3 +160,14 @@ def test_match_staging_skips_linked_accounts(monkeypatch):
         {"player_id": 555, "name": "신입", "race": "T", "result": "loss"}]})
     assert repo.stage_unknown_elo_candidates([m]) == 1
     assert written["ids"] == [555]
+
+
+def test_ranking_links_tier_players_by_elo_id_only():
+    """이름으로는 잇지 않는다: '진땅콩.' 같은 다른 계정에 티어가 붙으면 안 된다."""
+    from processors.staruniv_h2h import link_tier_players
+    players = {'775': ['진땅콩', 'P'], '900': ['진땅콩.', 'T'], '5': ['노아이디', 'Z']}
+    members = [{'elo_id': '775', 'nickname': '진땅콩', 'team': 'A', 'id': 1, 'tier': '7'},
+               {'elo_id': '', 'nickname': '노아이디', 'team': 'B', 'id': 2, 'tier': '8'}]
+    linked, missing = link_tier_players(players, members)
+    assert list(linked) == ['775']
+    assert missing == ['노아이디']

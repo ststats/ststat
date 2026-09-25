@@ -26,9 +26,9 @@
 프로필 카드에 각자 전체 승률도 보여줘야 해서 둘 다 받는다(같은 샤드면 요청이 하나로 합쳐진다).
 
 [티어표와 잇기]
-검색 대상은 티어표(시너지 명단)에 있는 선수다. 시너지 명단에 eloboard 선수 번호(elo_id)가
-들어 있으므로 그 번호로 잇는다. elo_id가 비어 있는 선수만 이름으로 맞춰보고(공백·대소문자 무시),
-그래도 못 찾으면 data/h2h_alias.json 에 {"시너지 닉네임": "eloboard 이름"} 으로 적어주면 된다.
+검색 대상은 티어표(시너지 명단)에 있는 선수다. 명단의 eloboard 선수 번호(elo_id, 메인 계정)로만 잇는다.
+이름으로는 잇지 않는다: EloBoard는 한 사람의 계정을 '진땅콩.', '진땅콩..'처럼 이름만 살짝 바꿔 여러 개
+두므로 이름으로 맞추면 엉뚱한 계정에 티어가 붙는다. ELO ID가 빈 선수는 어드민에서 채우면 잡힌다.
 
 [대회 이름] eloboard는 형식을 영문 코드로 준다(sponsored, college_war ...). 화면에 그대로 쓰면
 읽기 어려워서 아래 CAT_LABELS로 우리말 이름을 붙인다. 목록에 없는 코드는 원문 그대로 둔다.
@@ -47,7 +47,6 @@ import sys
 
 SRC_PATH = os.path.join('data', 'eloboard.json')
 OUT_DIR = os.path.join('docs', 'data', 'h2h')
-ALIAS_PATH = os.path.join('data', 'h2h_alias.json')
 
 # 샤드 하나가 넘지 않으려는 목표 용량(바이트). 개별 파일 시절 가장 큰 선수 파일이
 # ~270KB였으므로, 그보다 조금 넉넉하게 잡아서 "샤드로 묶었더니 오히려 더 커졌다"는
@@ -104,11 +103,6 @@ CAT_LABELS = {
     'college_war': '대학',
     '': '기타',
 }
-
-
-def norm(name):
-    """이름 맞추기용 키. 공백·기호를 빼고 소문자로."""
-    return re.sub(r'[\s_.\-]+', '', str(name or '')).lower()
 
 
 def load_json(path, default=None):
@@ -172,25 +166,13 @@ def resolve_tier_members(offline):
     raise RuntimeError('Supabase tier_members is empty; refusing incomplete ranking build')
 
 
-def link_tier_players(players, tier_members, alias):
-    """티어표 명단 ↔ eloboard 선수 잇기: elo_id가 먼저, 없으면 이름으로 찾는다.
+def link_tier_players(players, tier_members):
+    """티어표 명단 ↔ eloboard 선수 잇기: 명단의 ELO ID(메인 계정)로만 잇는다(이름으로는 잇지 않는다).
     돌려주는 값: (linked: {pid: {n,tm,s,t?}}, missing: [명단에 있는데 못 찾은 닉네임, ...])."""
-    by_norm = {}
-    for pid, info in players.items():
-        by_norm.setdefault(norm(info[0] if isinstance(info, list) else info), pid)
-
     linked = {}
     missing = []
-    by_eloid, by_name = 0, 0
     for m in tier_members:
-        pid = ''
-        if m.get('elo_id') and m['elo_id'] in players:
-            pid, by_eloid = m['elo_id'], by_eloid + 1
-        else:
-            want = alias.get(m['nickname']) or m['nickname']
-            pid = by_norm.get(norm(want), '')
-            if pid:
-                by_name += 1
+        pid = m['elo_id'] if m.get('elo_id') and m['elo_id'] in players else ''
         if not pid:
             missing.append(m['nickname'])
             continue
@@ -198,7 +180,7 @@ def link_tier_players(players, tier_members, alias):
         linked[pid] = {'n': m['nickname'], 'tm': m['team'], 's': m['id'],
                        **({'t': m['tier']} if m['tier'] not in (None, '') else {})}
     if tier_members:
-        print(f'  잇기: elo_id {by_eloid}명 · 이름 {by_name}명 · 못 찾음 {len(missing)}명 (명단 {len(tier_members)}명)')
+        print(f'  잇기: elo_id {len(linked)}명 · 못 찾음(ELO ID 없음·EloBoard에 없음) {len(missing)}명 (명단 {len(tier_members)}명)')
     return linked, missing
 
 
@@ -242,8 +224,7 @@ def main():
     recent_maps = [[mid, count] for mid, count in recent_map_counts.most_common()]
 
     tier_date, tier_members = resolve_tier_members(args.offline)
-    alias = load_json(ALIAS_PATH, {})           # { 시너지 닉네임: eloboard 이름 }
-    linked, missing = link_tier_players(players, tier_members, alias)
+    linked, missing = link_tier_players(players, tier_members)
 
     # 티어표 선수의 경기만 선수별로 모은다. 행: [경기id, 날짜, 승자, 패자, 맵, 대회]
     # 명단을 못 받았는데도 그냥 진행하면 eloboard 전체 선수(수천 명)로 파일을 만들어
@@ -259,8 +240,7 @@ def main():
         elif not tier_members:
             print('   → 명단이 비어 있습니다. Supabase tier_members와 data/db.json 을 확인해주세요.')
         else:
-            print('   → 양쪽 다 있는데 하나도 안 맞습니다. 명단의 ELO ID가 비어 있다면')
-            print('      data/h2h_alias.json 에 {"시너지 닉네임": "eloboard 이름"} 으로 몇 명 적어주세요.')
+            print('   → 양쪽 다 있는데 하나도 안 맞습니다. 명단의 ELO ID가 비어 있는지 확인해주세요.')
         sys.exit(1)
     target = set(linked) if linked else set(players)
     per = {pid: [] for pid in target}
@@ -352,7 +332,7 @@ def main():
     if missing:
         print(f'   ℹ️ eloboard에서 못 찾은 티어표 선수 {len(missing)}명: {", ".join(missing[:15])}'
               f'{" ..." if len(missing) > 15 else ""}')
-        print(f'      이름이 다르면 {ALIAS_PATH} 에 {{"시너지 닉네임": "eloboard 이름"}} 으로 적어주세요.')
+        print('      어드민 선수 관리에서 ELO ID(메인 종족 계정)를 채우면 잡힙니다.')
 
 
 if __name__ == '__main__':
