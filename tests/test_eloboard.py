@@ -91,13 +91,11 @@ def test_sync_rereads_old_ids_restored_within_this_month(monkeypatch):
     assert result.metadata["rescan_from"] == "2026-09-01"
 
 
-
-def _setup_sync(monkeypatch, pages, stop_at, db_window_ids, backfill=False, previous_pending=()):
+def _setup_sync(monkeypatch, pages, stop_at, db_window_ids, previous_pending=()):
     import datetime as dt
     from jobs import sync_eloboard as job
     monkeypatch.setattr(job, "fetch_page", lambda offset, delay=0: pages[offset // job.PAGE_STEP] if offset // job.PAGE_STEP < len(pages) else [])
     monkeypatch.setattr(job, "DEFAULT_DELAY", 0)
-    monkeypatch.setattr(job, "FULL_BACKFILL", backfill)
     monkeypatch.setattr(job, "get_latest_match_id", lambda: stop_at)
     monkeypatch.setattr(job, "upsert_dimensions", lambda m: {"players": 0, "maps": 0, "categories": 0})
     saved = {}
@@ -160,15 +158,6 @@ def test_mass_deletion_is_refused(monkeypatch):
     assert result.metadata["delete_skipped"].startswith("too_many:")
 
 
-def test_full_backfill_reads_everything_and_never_deletes(monkeypatch):
-    pages = [[_row(3000, "2026-09-23"), _row(20, "2024-05-01"), _row(10, "2022-02-23")]]
-    job, saved, asked = _setup_sync(monkeypatch, pages, stop_at=3000, db_window_ids={999}, backfill=True)
-    result = job.run()
-    assert saved["ids"] == [10, 20, 3000]
-    assert "deleted" not in saved and "range" not in asked
-    assert result.metadata["delete_skipped"] == "full_backfill"
-
-
 def test_late_registered_old_match_with_bigger_id_is_saved_and_never_deleted(monkeypatch):
     """목록은 날짜순이라 지난 날짜로 늦게 등록된 경기는 뒤 페이지에 있고 ID가 더 크다.
     예전엔 첫 페이지 최대 ID(100)보다 큰 999를 건너뛰어 저장하지 않고, 삭제 대상으로까지 봤다."""
@@ -179,13 +168,6 @@ def test_late_registered_old_match_with_bigger_id_is_saved_and_never_deleted(mon
     assert 999 in saved["ids"]
     assert "deleted" not in saved
     assert result.metadata["pending_delete"] == []
-
-
-def test_full_backfill_keeps_late_registered_bigger_ids(monkeypatch):
-    pages = [[_row(100, "2026-09-24")], [_row(999, "2024-01-10")]]
-    job, saved, _ = _setup_sync(monkeypatch, pages, stop_at=100, db_window_ids=set(), backfill=True)
-    job.run()
-    assert saved["ids"] == [100, 999]
 
 
 def test_deleted_rows_are_recorded_before_deletion(monkeypatch):

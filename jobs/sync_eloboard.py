@@ -40,9 +40,6 @@ def rescan_cutoff(today: dt.date, overlap_days: int = OVERLAP_DAYS,
     return min(today - dt.timedelta(days=overlap_days), month_start).isoformat()
 MAX_PAGES = int(os.getenv("ELOBOARD_MAX_PAGES", "4000"))
 MIN_VALID_RATIO = 0.95
-# 전체 다시 받기: 1이면 이미 받은 경기도 처음부터 끝까지 다시 읽어 upsert하고, 지우지 않는다.
-# 누락·삭제된 경기를 복구할 때 한 번만 쓴다(.github/workflows/backfill-eloboard.yml).
-FULL_BACKFILL = os.getenv("ELOBOARD_BACKFILL", "") == "1"
 # 한 번에 이만큼보다 많이(훑은 범위 경기의 비율) 사라졌다고 나오면 지우지 않는다.
 # EloBoard가 실제로 경기를 지우는 건 드물다 - 대량 삭제는 수집 쪽 착오일 가능성이 크다.
 MAX_DELETE_RATIO = float(os.getenv("ELOBOARD_MAX_DELETE_RATIO", "0.02"))
@@ -54,7 +51,7 @@ MAX_PENDING_DELETE = 5000
 def run() -> JobResult:
     stop_at = get_latest_match_id()
     today_kst = dt.datetime.now(KST).date()
-    cutoff = rescan_cutoff(today_kst) if stop_at and not FULL_BACKFILL else ""
+    cutoff = rescan_cutoff(today_kst) if stop_at else ""
 
     parsed: dict[int, EloMatch] = {}
     seen_ids: set[int] = set()
@@ -144,9 +141,7 @@ def run() -> JobResult:
     deleted_rows: list[dict] = []
     delete_skipped = None
     pending_delete: list[int] = []
-    if FULL_BACKFILL:
-        delete_skipped = "full_backfill"
-    elif cutoff:
+    if cutoff:
         window_ids = load_match_ids_between(cutoff, today_kst.isoformat())
         gone = window_ids - seen_ids
         limit = max(MAX_DELETE_MIN, int(len(window_ids) * MAX_DELETE_RATIO))
@@ -179,7 +174,6 @@ def run() -> JobResult:
             "invalid_samples": invalid_samples,
             "delete_skipped": delete_skipped,
             "pending_delete": pending_delete,
-            "full_backfill": FULL_BACKFILL,
             "candidate_players_staged": candidates,
             "players_upserted": dimensions["players"],
             "maps_upserted": dimensions["maps"],
