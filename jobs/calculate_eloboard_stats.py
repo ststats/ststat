@@ -61,7 +61,7 @@ def run() -> JobResult:
     # failed one. A later run can safely retry cleanup.
     cleanup_warning = None
     try:
-        cleanup_old_snapshots(keep=3)
+        cleanup_old_snapshots(keep=1)
     except Exception as exc:
         cleanup_warning = f"{type(exc).__name__}: {exc}"[:3000]
     lap('activate_cleanup_seconds')

@@ -267,6 +267,14 @@ as $$ select exists(select 1 from public.elo_derived_snapshots s where s.snapsho
 revoke all on function public.is_active_elo_snapshot(uuid) from public;
 grant execute on function public.is_active_elo_snapshot(uuid) to anon, authenticated, service_role;
 
+-- 공개 읽기 정책용: 활성 스냅샷 ID. 정책에서 (select …)로 감싸 한 조회에 한 번만 계산되게 한다
+-- (행마다 is_active_elo_snapshot을 부르면 스냅샷 전체를 읽을 때 수십만 번 불린다).
+create or replace function public.active_elo_snapshot_id()
+returns uuid language sql stable security definer set search_path=public
+as $$ select snapshot_id from public.elo_derived_snapshots where status='active' limit 1 $$;
+revoke all on function public.active_elo_snapshot_id() from public;
+grant execute on function public.active_elo_snapshot_id() to anon, authenticated, service_role;
+
 do $$
 declare t text;
 begin
@@ -276,7 +284,7 @@ begin
 
   foreach t in array array['elo_player_stats','elo_h2h_stats','elo_race_stats','elo_rankings','elo_ranking_meta','elo_rating_history'] loop
     execute format('drop policy if exists %I on public.%I', t || '_public_read', t);
-    execute format('create policy %I on public.%I for select to anon, authenticated using (public.is_active_elo_snapshot(snapshot_id))', t || '_public_read', t);
+    execute format('create policy %I on public.%I for select to anon, authenticated using (snapshot_id = (select public.active_elo_snapshot_id()))', t || '_public_read', t);
   end loop;
 end $$;
 
@@ -660,7 +668,7 @@ alter table public.elo_ranking_meta
 alter table public.elo_player_ratings enable row level security;
 drop policy if exists elo_player_ratings_public_read on public.elo_player_ratings;
 create policy elo_player_ratings_public_read on public.elo_player_ratings
-  for select to anon, authenticated using (public.is_active_elo_snapshot(snapshot_id));
+  for select to anon, authenticated using (snapshot_id = (select public.active_elo_snapshot_id()));
 grant select on public.elo_player_ratings to anon, authenticated;
 
 

@@ -211,7 +211,8 @@ def activate_snapshot(snapshot_id: str):
     get_supabase().rpc('activate_elo_derived_snapshot', {'p_snapshot': snapshot_id}).execute()
 
 
-def cleanup_old_snapshots(keep: int = 3):
+def cleanup_old_snapshots(keep: int = 1):
+    """활성 스냅샷 말고 지난 스냅샷은 keep개만 남긴다(되돌리기용 하나면 충분하고, 하나가 수만 행이라 DB 용량을 먹는다)."""
     db = get_supabase()
     rows = db.table('elo_derived_snapshots').select('snapshot_id,status,created_at').order('created_at', desc=True).execute().data or []
     retired = [r for r in rows if r.get('status') in ('retired', 'failed')]
