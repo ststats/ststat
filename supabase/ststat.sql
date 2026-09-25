@@ -73,6 +73,38 @@ alter table public.tier_member_candidates
 alter table public.tier_member_candidates
   add column if not exists updated_at timestamptz not null default now();
 
+-- EloBoard에 적힌 SOOP ID(틀린 경우가 있어 참고용). 같은 사람 판별은 ELO ID로 한다.
+alter table public.tier_member_candidates
+  add column if not exists soop_id text;
+
+-- 한 사람 = 한 줄(id 'elo:<ELO ID>'). 예전엔 티어 목록에서 온 선수는 SOOP ID를 id로 써서, 경기 기록에서 먼저
+-- 'elo:<ELO ID>'로 올라온 같은 사람이 두 줄이 되거나, SOOP ID가 틀린 선수가 명단에 있는데도 계속 신규로 떴다.
+-- 아래는 예전 행을 옮기는 정리이고, 다 옮긴 뒤에는 다시 실행해도 바뀌는 것이 없다.
+update public.tier_member_candidates set soop_id = id
+where id not like 'elo:%' and soop_id is null;
+
+update public.tier_member_candidates e
+set soop_id = coalesce(e.soop_id, o.soop_id),
+    tier = coalesce(e.tier, o.tier),
+    affiliation = coalesce(e.affiliation, o.affiliation),
+    gender = coalesce(e.gender, o.gender)
+from public.tier_member_candidates o
+where o.id not like 'elo:%' and o.elo_id is not null and e.id = 'elo:' || o.elo_id;
+
+delete from public.tier_member_candidates o
+where o.id not like 'elo:%' and o.elo_id is not null
+  and (exists (select 1 from public.tier_member_candidates e where e.id = 'elo:' || o.elo_id)
+       or exists (select 1 from public.tier_member_candidates d
+                  where d.id not like 'elo:%' and d.elo_id = o.elo_id and d.id < o.id));
+
+update public.tier_member_candidates set id = 'elo:' || elo_id
+where id not like 'elo:%' and elo_id is not null;
+
+-- 이미 명단에 있는 선수(ELO ID 기준)는 대기 명단에서 뺀다
+delete from public.tier_member_candidates c
+where c.elo_id is not null
+  and exists (select 1 from public.tier_members m where m.elo_id = c.elo_id);
+
 create index if not exists tier_member_candidates_elo_id_idx
   on public.tier_member_candidates (elo_id);
 create index if not exists tier_member_candidates_found_at_idx

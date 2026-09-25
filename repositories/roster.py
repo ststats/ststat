@@ -12,7 +12,12 @@ from repositories.supabase import get_supabase
 AUTO_OWNED_EXISTING_COLUMNS = {"name"}
 
 
-def load_roster() -> dict[str, ExistingRosterMember]:
+def candidate_id(elo_id, soop_id=None) -> str:
+    """대기 명단 행 id. 한 사람은 ELO ID 하나로 한 줄(경기 기록에서 먼저 본 선수와 같은 id)."""
+    return f"elo:{elo_id}" if elo_id is not None else str(soop_id)
+
+
+def load_roster() -> list[ExistingRosterMember]:
     db = get_supabase()
     rows = []
     start = 0
@@ -32,21 +37,25 @@ def load_roster() -> dict[str, ExistingRosterMember]:
             break
         start += 1000
 
-    out: dict[str, ExistingRosterMember] = {}
+    out: list[ExistingRosterMember] = []
     for row in rows:
-        soop_id = str(row.get("soop_id") or "").strip()
-        if not soop_id:
-            continue
-        out[soop_id.lower()] = ExistingRosterMember(
-            soop_id=soop_id,
+        elo_id = row.get("elo_id")
+        try:
+            elo_id = int(elo_id) if elo_id is not None else None
+        except (TypeError, ValueError):
+            elo_id = None
+        out.append(ExistingRosterMember(
+            id=row["id"],
+            soop_id=(str(row.get("soop_id") or "").strip() or None),
             elo_name=(str(row.get("name") or "").strip() or None),
-            elo_id=row.get("elo_id"),
+            elo_id=elo_id,
             modified_at=(str(row.get("modified_at") or "").strip() or None),
-        )
+        ))
     return out
 
 
 def load_pending_ids() -> set[str]:
+    """대기 명단 행 id(소문자). 새 id는 'elo:<ELO ID>'."""
     db = get_supabase()
     rows = []
     start = 0
@@ -71,21 +80,41 @@ def load_pending_ids() -> set[str]:
     }
 
 
-def update_elo_names(updates: dict[str, str]) -> int:
-    """Update only the auto-owned EloBoard name on existing roster rows."""
+def update_elo_names(updates: dict[int, str]) -> int:
+    """Update only the auto-owned EloBoard name on existing roster rows (tier_members.id → name)."""
     if not updates:
         return 0
 
     db = get_supabase()
     written = 0
-    for canonical_soop_id, elo_name in updates.items():
+    for row_id, elo_name in updates.items():
         payload = {"name": elo_name}
         unknown = set(payload) - AUTO_OWNED_EXISTING_COLUMNS
         if unknown:
             raise RuntimeError(f"Refusing to update non-owned roster fields: {sorted(unknown)}")
-        db.table("tier_members").update(payload).eq("soop_id", canonical_soop_id).execute()
+        db.table("tier_members").update(payload).eq("id", row_id).execute()
         written += 1
     return written
+
+
+def drop_resolved_candidates(elo_ids: set[int]) -> int:
+    """명단에 이미 있는 선수(ELO ID 기준)를 대기 명단에서 지운다(티어표 갱신으로 추가된 뒤 등)."""
+    if not elo_ids:
+        return 0
+    db = get_supabase()
+    rows = []
+    start = 0
+    while True:
+        batch = (db.table("tier_member_candidates").select("id,elo_id").order("id")
+                 .range(start, start + 999).execute().data or [])
+        rows.extend(batch)
+        if len(batch) < 1000:
+            break
+        start += 1000
+    gone = [r["id"] for r in rows if r.get("elo_id") is not None and int(r["elo_id"]) in elo_ids]
+    for i in range(0, len(gone), 200):
+        db.table("tier_member_candidates").delete().in_("id", gone[i:i + 200]).execute()
+    return len(gone)
 
 
 def upsert_candidates(candidates: list[RosterCandidate]) -> int:
@@ -98,6 +127,7 @@ def upsert_candidates(candidates: list[RosterCandidate]) -> int:
             "id": c.id,
             "nickname": c.nickname,
             "elo_id": c.elo_id,
+            "soop_id": c.soop_id,
             "gender": c.gender,
             "race": c.race,
             "tier": c.tier,

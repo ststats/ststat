@@ -7,6 +7,8 @@ from urllib.request import Request, urlopen
 from models.roster import RosterCandidate, TierApiPlayer
 from models.sync_job import JobResult
 from repositories.roster import (
+    candidate_id,
+    drop_resolved_candidates,
     load_pending_ids,
     load_roster,
     update_elo_names,
@@ -70,37 +72,52 @@ def fetch_tier_players() -> list[TierApiPlayer]:
 
 
 def run() -> JobResult:
-    roster = load_roster()
-    if not roster:
+    members = load_roster()
+    if not members:
         raise RuntimeError("tier_members is empty; refusing to treat the whole API as new candidates")
+    # 같은 사람 판별: ELO ID가 먼저다. EloBoard에 SOOP ID가 틀리게 적힌 선수가 있어서, 예전처럼 SOOP ID로만
+    # 찾으면 명단에 있는 사람이 매번 '신규'로 대기 명단에 올라왔다. ELO ID가 없는 선수만 SOOP ID로 찾는다.
+    by_elo = {m.elo_id: m for m in members if m.elo_id is not None}
+    by_soop = {m.soop_id.lower(): m for m in members if m.soop_id}
 
     pending_ids = load_pending_ids()
     api_players = fetch_tier_players()
 
-    elo_name_updates: dict[str, str] = {}
+    elo_name_updates: dict[int, str] = {}
     new_candidates: list[RosterCandidate] = []
     seen_candidate_ids: set[str] = set()
+    soop_mismatch: list[dict] = []
 
     for player in api_players:
-        normalized_id = player.soop_id.lower()
-        existing = roster.get(normalized_id)
+        existing = by_elo.get(player.elo_id) if player.elo_id is not None else None
+        if existing is None and player.elo_id is None and player.soop_id:
+            existing = by_soop.get(player.soop_id.lower())
+        if existing is None and player.elo_id is not None and player.soop_id:
+            # ELO ID로는 없지만 같은 SOOP ID의 선수가 있고 그 선수에 ELO ID가 비어 있으면 같은 사람일 가능성이
+            # 크다. 다만 EloBoard SOOP ID가 틀릴 수 있어 자동으로 잇지 않고 대기 명단에 두고 기록만 남긴다.
+            same_soop = by_soop.get(player.soop_id.lower())
+            if same_soop is not None and same_soop.elo_id is None and len(soop_mismatch) < 50:
+                soop_mismatch.append({"tier_member_id": same_soop.id, "elo_id": player.elo_id,
+                                      "soop_id": player.soop_id, "elo_name": player.elo_name})
 
         if existing:
             # Preserve the existing Synergy behavior: only EloBoard source name is automatic.
-            # nickname/race/tier/affiliation/role/etc. are manual/admin-owned and untouched.
+            # nickname/race/tier/affiliation/role/soop_id/etc. are manual/admin-owned and untouched.
             if player.elo_name and player.elo_name != (existing.elo_name or ""):
-                elo_name_updates[existing.soop_id] = player.elo_name
+                elo_name_updates[existing.id] = player.elo_name
             continue
 
-        if normalized_id in pending_ids or normalized_id in seen_candidate_ids:
+        cid = candidate_id(player.elo_id, player.soop_id)
+        if cid.lower() in pending_ids or cid in seen_candidate_ids:
             continue
 
-        seen_candidate_ids.add(normalized_id)
+        seen_candidate_ids.add(cid)
         new_candidates.append(
             RosterCandidate(
-                id=player.soop_id,
+                id=cid,
                 nickname=player.elo_name,
                 elo_id=player.elo_id,
+                soop_id=player.soop_id or None,
                 gender=player.gender,
                 race=player.race,
                 tier=player.tier,
@@ -116,15 +133,19 @@ def run() -> JobResult:
 
     updated = update_elo_names(elo_name_updates)
     candidates_written = upsert_candidates(new_candidates)
+    resolved = drop_resolved_candidates(set(by_elo))
 
     return JobResult(
         records_read=len(api_players),
         records_written=updated + candidates_written,
         records_skipped=max(0, len(api_players) - updated - candidates_written),
         metadata={
-            "roster_count": len(roster),
+            "roster_count": len(members),
             "elo_names_updated": updated,
             "new_candidates": candidates_written,
+            "candidates_resolved": resolved,
+            # 명단에 ELO ID가 비어 있고 SOOP ID만 같은 경우(어드민 선수 관리에서 ELO ID를 확인해 채우면 된다)
+            "possible_links": soop_mismatch,
             "manual_fields_touched": 0,
             "modified_at_cleared": 0,
         },
