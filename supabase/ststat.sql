@@ -129,21 +129,8 @@ create policy tier_member_candidates_admin on public.tier_member_candidates
 -- 3. EloBoard 수집 보강
 -- ############################################################################
 
--- ststat Part 3: EloBoard collection hardening.
--- Safe to run more than once. Existing StarUniv elo_* tables are reused.
-
-create index if not exists elo_matches_date_idx on public.elo_matches (match_date desc);
-create index if not exists elo_matches_winner_idx on public.elo_matches (winner_elo_id);
-create index if not exists elo_matches_loser_idx on public.elo_matches (loser_elo_id);
-create index if not exists elo_matches_map_idx on public.elo_matches (map_id);
-create index if not exists elo_matches_category_idx on public.elo_matches (category_id);
-create index if not exists elo_players_name_idx on public.elo_players (name);
-
--- Pipeline writes these tables with the service role. Browser write access is unnecessary.
-alter table public.elo_categories enable row level security;
-alter table public.elo_maps enable row level security;
-alter table public.elo_players enable row level security;
-alter table public.elo_matches enable row level security;
+-- elo_* 표·인덱스·RLS는 staruniv.sql 1번이 만든다. 여기에는 파이프라인(service role)의 쓰기 권한만 둔다.
+-- 브라우저는 쓰지 않는다(관리자 조회 정책은 staruniv.sql, 공개 조회는 9번 뷰).
 
 grant select, insert, update, delete on table public.elo_categories to service_role;
 grant select, insert, update, delete on table public.elo_maps to service_role;
@@ -635,6 +622,7 @@ grant select on public.elo_public_players, public.elo_public_matches to anon, au
 
 alter table public.daily_member_stats enable row level security;
 drop policy if exists synergy_daily_public_read on public.daily_member_stats;
+-- 생일·성별 포함 전체 공개: 시너지 프로필에 표시한다(운영 결정 2026-09-26, staruniv.sql 2번 참고)
 create policy synergy_daily_public_read on public.daily_member_stats
 for select to anon, authenticated using (true);
 grant select on public.daily_member_stats to anon, authenticated;

@@ -11,6 +11,8 @@ realtime:
     - current broadcast metadata
     - realtime checked timestamps
 
+# 정기 실행: cron-job.org → GitHub workflow_dispatch(pipeline.yml), 매일 03:50부터 4시간마다(한국 시간).
+# 파이프라인은 test.yml이 통과해야 시작한다.
 roster:
   owner: ststat
   executor: external_cron_to_github_actions

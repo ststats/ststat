@@ -6,14 +6,17 @@
 //
 // 배포: Supabase 대시보드 → Edge Functions → 새 함수 "live-status"에 이 파일을 붙여 넣고,
 //       "Verify JWT"는 끈다(pg_cron이 키 없이 부른다). 쓰기는 함수 안에서만 service role로 한다.
-// 확인: 브라우저로 .../functions/v1/live-status?dry=1 을 열면 표를 바꾸지 않고 쪽수·실패 수·찾은 수만 보여 준다.
+// 확인: 브라우저로 .../functions/v1/live-status?dry=1 을 열면 수집하지 않고 마지막 수집의 시각·쪽수·실패 수·찾은 수만
+//       보여 준다(누구나 부를 수 있으므로 SOOP에 요청하지 않고, 정기 수집의 50초 칸도 잡지 않는다).
 // 같은 시각에 여러 번 불러도 50초에 한 번만 실제로 수집한다(try_begin_live_scan).
 
 const PAGE_SIZE = 60;
 const MAX_PAGES = 150;
 const CONCURRENCY = 6;
 const FETCH_TIMEOUT_MS = 8000;   // SOOP 한 쪽 요청 최대 대기
-const MAX_FAILED_RATIO = 0.2;    // 못 받은 쪽이 이보다 많으면 결과를 저장하지 않는다
+// 못 받은 쪽이 이보다 많으면 결과를 저장하지 않는다. 이하이면 받은 쪽만으로 표를 바꾼다 - 못 받은 쪽의
+// 방송이 한 번(2분) 빠질 수 있지만, 끝난 방송이 남는 것보다 낫다(운영 결정 2026-09-26).
+const MAX_FAILED_RATIO = 0.2;
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -127,8 +130,24 @@ function json(body: unknown, status = 200) {
   });
 }
 
+async function lastScanState() {
+  const res = await fetch(
+    `${SUPABASE_URL}/rest/v1/live_scan_state?select=started_at,finished_at,last_ok_at,last_error,info&id=eq.1`,
+    { headers: DB_HEADERS },
+  );
+  if (!res.ok) throw new Error("수집 상태 읽기 실패: " + res.status);
+  const rows = await res.json();
+  return rows[0] ?? null;
+}
+
 Deno.serve(async (req) => {
-  const dry = new URL(req.url).searchParams.get("dry") === "1";
+  if (new URL(req.url).searchParams.get("dry") === "1") {
+    try {
+      return json({ dry: true, state: await lastScanState() });
+    } catch (e) {
+      return json({ dry: true, error: e instanceof Error ? e.message : String(e) }, 500);
+    }
+  }
   const t0 = Date.now();
   if (!(await rpc("try_begin_live_scan"))) {
     return json({ skipped: true, reason: "50초 안에 이미 수집이 시작됨" });
@@ -139,10 +158,6 @@ Deno.serve(async (req) => {
     if (roster.size === 0) throw new Error("선수 목록이 비어 있습니다.");
     const scan = await scanAllSOOP(roster);
     info = { ...scan.info, roster: roster.size, ms: Date.now() - t0 };
-    if (dry) {
-      await rpc("fail_live_scan", { p_error: "dry run(저장 안 함)", p_info: info });
-      return json({ dry: true, ...info, sample: scan.rows.slice(0, 5) });
-    }
     const saved = await rpc("replace_live_broadcasts", { p_rows: scan.rows, p_info: info });
     return json({ success: true, live_count: saved, ...info });
   } catch (e) {

@@ -14,7 +14,12 @@ env:
   PYTHONUNBUFFERED: "1"
 
 jobs:
+  # 테스트(test.yml)를 먼저 돌리고, 통과해야 공유 DB에 쓰는 작업을 시작한다.
+  test:
+    uses: ./.github/workflows/test.yml
+
   foundation:
+    needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -75,6 +80,7 @@ jobs:
       - run: python scripts/run_job.py sync_synergy_daily
 
   videos:
+    needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -89,6 +95,7 @@ jobs:
       - run: python scripts/run_job.py sync_videos
 
   audit:
+    needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

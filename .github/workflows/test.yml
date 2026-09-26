@@ -1,9 +1,12 @@
 name: Test
 
+# python -m pytest (tests/). Pipeline도 수집 전에 이 워크플로를 불러 돌린다 - 테스트가 실패하면
+# 공유 DB에 쓰지 않고 멈춘다.
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_call:
 
 jobs:
   test:
