@@ -10,6 +10,7 @@
 --   1 작업 기록 → 2 선수 후보 대기열 → 3 EloBoard 수집 보강 → 4 EloBoard 파생 통계(스냅샷 교체)
 --   → 5 시너지 월간·일별 방송 통계 → 6 영상 수집 → 7 경기·라운드 연결 점검 → 8 시너지 하루치 게시
 --   → 9 StarUniv·Synergy 공개 조회 → 10 티어랭킹 v4(모든 선수 레이팅·종족 상성) → 11 어드민 운영 현황
+--   → 12 방송 중 표시(라이브)
 
 
 -- ############################################################################
@@ -784,3 +785,138 @@ $$;
 
 revoke all on function public.admin_dashboard_stats() from public;
 grant execute on function public.admin_dashboard_stats() to authenticated;
+
+
+-- ############################################################################
+-- 12. 방송 중 표시(라이브)
+-- ############################################################################
+-- Edge Function live-status(supabase/functions/live-status)가 SOOP 전체 방송 목록을 훑어
+-- tier_members에 있는 SOOP 아이디 중 방송 중인 사람만 이 표에 통째로 바꿔 넣는다.
+-- 사이트는 live_broadcasts_current(최근 5분 안에 갱신된 것만)를 바로 읽는다.
+-- 수집이 멈추면 5분 뒤 전부 '방송 안 함'으로 보인다(예전 KV 4분 만료와 같은 역할).
+
+create table if not exists public.live_broadcasts (
+    soop_id text primary key,
+    broad_no text,
+    broad_title text,
+    current_sum_viewer integer,
+    broad_start text,
+    category_name text,
+    broad_cate_no text,
+    scanned_at timestamptz not null default now()
+);
+
+alter table public.live_broadcasts enable row level security;
+drop policy if exists live_broadcasts_public_read on public.live_broadcasts;
+create policy live_broadcasts_public_read on public.live_broadcasts
+for select to anon, authenticated using (true);
+grant select on table public.live_broadcasts to anon, authenticated;
+grant select, insert, update, delete on table public.live_broadcasts to service_role;
+
+create or replace view public.live_broadcasts_current
+with (security_invoker = true)
+as
+select soop_id, broad_no, broad_title, current_sum_viewer, broad_start, category_name, broad_cate_no, scanned_at
+from public.live_broadcasts
+where scanned_at > now() - interval '5 minutes';
+
+grant select on public.live_broadcasts_current to anon, authenticated;
+
+-- 수집 상태 한 줄: 마지막 시작·성공 시각, 쪽수·실패 수 같은 요약, 마지막 오류
+create table if not exists public.live_scan_state (
+    id smallint primary key check (id = 1),
+    started_at timestamptz,
+    finished_at timestamptz,
+    last_ok_at timestamptz,
+    info jsonb not null default '{}'::jsonb,
+    last_error text
+);
+
+alter table public.live_scan_state enable row level security;
+grant select, insert, update on table public.live_scan_state to service_role;
+
+-- 수집 시작 표시. 50초 안에 다른 수집이 시작됐으면 false(겹쳐 돌거나 누가 주소를 마구 불러도
+-- SOOP에 요청이 몰리지 않게).
+create or replace function public.try_begin_live_scan()
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  ok boolean;
+begin
+  insert into public.live_scan_state (id) values (1) on conflict (id) do nothing;
+  update public.live_scan_state
+     set started_at = now()
+   where id = 1
+     and (started_at is null or started_at < now() - interval '50 seconds')
+  returning true into ok;
+  return coalesce(ok, false);
+end;
+$$;
+
+-- 수집 결과로 표를 통째로 바꾼다(한 트랜잭션이라 읽는 쪽이 빈 표를 보는 순간이 없다).
+create or replace function public.replace_live_broadcasts(p_rows jsonb, p_info jsonb)
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  n integer;
+begin
+  delete from public.live_broadcasts where true;
+  insert into public.live_broadcasts
+    (soop_id, broad_no, broad_title, current_sum_viewer, broad_start, category_name, broad_cate_no, scanned_at)
+  select r.soop_id, r.broad_no, r.broad_title, r.current_sum_viewer, r.broad_start, r.category_name, r.broad_cate_no, now()
+  from jsonb_to_recordset(coalesce(p_rows, '[]'::jsonb)) as r(
+    soop_id text, broad_no text, broad_title text, current_sum_viewer integer,
+    broad_start text, category_name text, broad_cate_no text)
+  where coalesce(r.soop_id, '') <> ''
+  on conflict (soop_id) do nothing;
+  get diagnostics n = row_count;
+  update public.live_scan_state
+     set finished_at = now(), last_ok_at = now(), info = coalesce(p_info, '{}'::jsonb), last_error = null
+   where id = 1;
+  return n;
+end;
+$$;
+
+-- 수집 실패 기록(표는 그대로 둔다 - 5분 안에 다음 수집이 성공하면 이어진다)
+create or replace function public.fail_live_scan(p_error text, p_info jsonb)
+returns void
+language sql
+security definer
+set search_path = public
+as $$
+  update public.live_scan_state
+     set finished_at = now(), last_error = p_error, info = coalesce(p_info, '{}'::jsonb)
+   where id = 1;
+$$;
+
+revoke all on function public.try_begin_live_scan() from public, anon, authenticated;
+revoke all on function public.replace_live_broadcasts(jsonb, jsonb) from public, anon, authenticated;
+revoke all on function public.fail_live_scan(text, jsonb) from public, anon, authenticated;
+grant execute on function public.try_begin_live_scan() to service_role;
+grant execute on function public.replace_live_broadcasts(jsonb, jsonb) to service_role;
+grant execute on function public.fail_live_scan(text, jsonb) to service_role;
+
+-- 2분마다 실행(pg_cron → pg_net으로 Edge Function 호출).
+-- Edge Function을 배포하고 ?dry=1로 SOOP 목록이 받아지는 걸 확인한 뒤에만 아래 주석을 풀고 실행한다.
+-- 1분으로 바꾸려면 '*/2 * * * *'를 '* * * * *'로.
+--
+-- create extension if not exists pg_cron;
+-- create extension if not exists pg_net with schema extensions;
+-- select cron.unschedule(jobid) from cron.job where jobname in ('live-status', 'live-status-log-cleanup');
+-- select cron.schedule('live-status', '*/2 * * * *', $cron$
+--   select net.http_post(
+--     url := 'https://czqxedrayvgxirvlveon.supabase.co/functions/v1/live-status',
+--     body := '{}'::jsonb,
+--     timeout_milliseconds := 60000
+--   );
+-- $cron$);
+-- -- pg_cron 실행 기록이 하루 720줄씩 쌓이므로 3일 지난 것은 지운다
+-- select cron.schedule('live-status-log-cleanup', '17 4 * * *', $cron$
+--   delete from cron.job_run_details where end_time < now() - interval '3 days';
+-- $cron$);
