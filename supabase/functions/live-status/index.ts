@@ -29,8 +29,10 @@ async function rpc(name: string, args: Record<string, unknown> = {}) {
     headers: DB_HEADERS,
     body: JSON.stringify(args),
   });
-  if (!res.ok) throw new Error(`${name} 실패: ${res.status} ${await res.text()}`);
-  return await res.json();
+  const text = await res.text();
+  if (!res.ok) throw new Error(`${name} 실패: ${res.status} ${text}`);
+  // 반환값 없는 함수(fail_live_scan)는 본문 없이 204로 온다
+  return text ? JSON.parse(text) : null;
 }
 
 async function loadRosterIds(): Promise<Set<string>> {
