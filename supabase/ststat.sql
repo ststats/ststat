@@ -902,21 +902,19 @@ grant execute on function public.try_begin_live_scan() to service_role;
 grant execute on function public.replace_live_broadcasts(jsonb, jsonb) to service_role;
 grant execute on function public.fail_live_scan(text, jsonb) to service_role;
 
--- 2분마다 실행(pg_cron → pg_net으로 Edge Function 호출).
--- Edge Function을 배포하고 ?dry=1로 SOOP 목록이 받아지는 걸 확인한 뒤에만 아래 주석을 풀고 실행한다.
+-- 2분마다 실행(pg_cron → pg_net으로 Edge Function 호출). 다시 실행해도 예약이 하나만 남는다.
 -- 1분으로 바꾸려면 '*/2 * * * *'를 '* * * * *'로.
---
--- create extension if not exists pg_cron;
--- create extension if not exists pg_net with schema extensions;
--- select cron.unschedule(jobid) from cron.job where jobname in ('live-status', 'live-status-log-cleanup');
--- select cron.schedule('live-status', '*/2 * * * *', $cron$
---   select net.http_post(
---     url := 'https://czqxedrayvgxirvlveon.supabase.co/functions/v1/live-status',
---     body := '{}'::jsonb,
---     timeout_milliseconds := 60000
---   );
--- $cron$);
--- -- pg_cron 실행 기록이 하루 720줄씩 쌓이므로 3일 지난 것은 지운다
--- select cron.schedule('live-status-log-cleanup', '17 4 * * *', $cron$
---   delete from cron.job_run_details where end_time < now() - interval '3 days';
--- $cron$);
+create extension if not exists pg_cron;
+create extension if not exists pg_net with schema extensions;
+select cron.unschedule(jobid) from cron.job where jobname in ('live-status', 'live-status-log-cleanup');
+select cron.schedule('live-status', '*/2 * * * *', $cron$
+  select net.http_post(
+    url := 'https://czqxedrayvgxirvlveon.supabase.co/functions/v1/live-status',
+    body := '{}'::jsonb,
+    timeout_milliseconds := 60000
+  );
+$cron$);
+-- pg_cron 실행 기록이 하루 720줄씩 쌓이므로 3일 지난 것은 지운다
+select cron.schedule('live-status-log-cleanup', '17 4 * * *', $cron$
+  delete from cron.job_run_details where end_time < now() - interval '3 days';
+$cron$);
