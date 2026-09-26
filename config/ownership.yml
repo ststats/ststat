@@ -1,7 +1,10 @@
 realtime:
   owner: ststat
-  executor: cloudflare_worker
+  executor: supabase_edge_function   # supabase/functions/live-status, pg_cron이 부름(supabase/ststat.sql 12번)
   cadence: "2 minutes"
+  owns_tables:
+    - live_broadcasts
+    - live_scan_state
   owns:
     - live broadcast status
     - realtime viewer count
@@ -13,8 +16,9 @@ roster:
   executor: external_cron_to_github_actions
   cadence: "4 hours"
   source: eloboard_tier_api
-  existing_tier_members_auto_columns:
-    - name
+  # 명단에 있는 선수는 고치지 않는다(jobs/sync_roster.py). 새 선수만 후보 대기열에 넣고,
+  # 명단에 올리거나 정보를 고치는 것은 어드민(선수 관리·티어표 갱신)이 한다.
+  existing_tier_members_auto_columns: []
   candidate_table: tier_member_candidates
   protected_manual_columns:
     - nickname
@@ -145,7 +149,7 @@ video_collection:
     - "ststat never creates/deletes admin channel configuration."
     - "ststat never overwrites videos.hidden."
     - "video_picks remain fully owned by StarUniv admin."
-    - "If all channels fail, the job fails and the previous good database contents remain untouched."
+    - "If all channels fail, the job fails. Nothing is deleted, but a channel that failed mid-upsert may be partially updated; re-running overwrites with the same values."
 
 
 match_round_integrity:

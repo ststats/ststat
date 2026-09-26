@@ -22,6 +22,7 @@ StarUniv와 Synergy가 사용하는 중앙 배치 파이프라인입니다. 외�
 
 ```powershell
 python -m pip install -r requirements.txt
+python -m pip install -r requirements-dev.txt   # 테스트용(pytest). 운영 파이프라인은 설치하지 않음
 python -m pytest -q
 python scripts/run_job.py healthcheck
 python scripts/run_job.py sync_roster
