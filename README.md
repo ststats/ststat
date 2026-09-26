@@ -32,7 +32,7 @@ python scripts/run_job.py sync_videos
 python scripts/run_job.py audit_match_rounds
 ```
 
-운영에서는 `.github/workflows/run-pipeline.yml`을 외부 스케줄러가 호출합니다. 작업들은 실제 의존성에 따라 분리되어 Poonggo나 YouTube 한 곳의 장애가 다른 독립 작업을 막지 않습니다.
+운영에서는 `.github/workflows/pipeline.yml`을 외부 스케줄러가 호출합니다. 작업들은 실제 의존성에 따라 분리되어 Poonggo나 YouTube 한 곳의 장애가 다른 독립 작업을 막지 않습니다.
 
 방송 중 표시는 이 파이프라인과 따로 돕니다: Supabase pg_cron이 2분마다 Edge Function `live-status`(`supabase/functions/live-status`)를 불러
 SOOP 전체 방송 목록을 훑고 `live_broadcasts`를 통째로 바꿉니다(`supabase/ststat.sql` 12번). 함수 코드를 고치면 Supabase 대시보드에 다시 배포합니다.
