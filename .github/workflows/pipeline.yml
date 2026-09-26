@@ -20,7 +20,7 @@ jobs:
 
   foundation:
     needs: test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
@@ -38,7 +38,7 @@ jobs:
 
   eloboard:
     needs: foundation
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
@@ -55,7 +55,7 @@ jobs:
 
   derived:
     needs: eloboard
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
@@ -68,7 +68,7 @@ jobs:
 
   synergy:
     needs: eloboard
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
@@ -81,7 +81,7 @@ jobs:
 
   videos:
     needs: test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
       YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
@@ -96,7 +96,7 @@ jobs:
 
   audit:
     needs: test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
