@@ -399,35 +399,9 @@ alter table public.synergy_month_confirmations enable row level security;
 -- 6. 영상 수집
 -- ############################################################################
 
--- ststat Part 6: video collection ownership/support
--- Existing StarUniv video tables are reused. Safe to re-run.
+-- 영상 표(video_channels·videos·video_picks)와 관리자 정책·공개 읽기 권한은 staruniv.sql(1·2번)이 만든다.
+-- 여기에는 수집 작업(repositories/videos.py)이 쓰는 인덱스와 열 소유 설명만 둔다(config/ownership.yml video_collection).
 
-create table if not exists public.video_channels (
-  channel_url text primary key,
-  channel_id text,
-  title text,
-  display_name text,
-  thumb text,
-  uploads text,
-  source_order integer not null unique,
-  active boolean not null default true,
-  updated_at timestamptz not null default now()
-);
-
-create table if not exists public.videos (
-  id text primary key,
-  channel_url text,
-  title text not null,
-  published timestamptz,
-  thumb text,
-  views bigint not null default 0,
-  short boolean not null default false,
-  hidden boolean not null default false,
-  updated_at timestamptz not null default now()
-);
-
-create index if not exists videos_published_idx on public.videos (published desc);
-create index if not exists videos_channel_idx on public.videos (channel_url);
 create index if not exists videos_channel_published_idx on public.videos (channel_url, published desc);
 
 comment on table public.videos is

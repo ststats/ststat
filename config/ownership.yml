@@ -117,6 +117,8 @@ video_collection:
   sources:
     - youtube_data_api_v3
     - youtube_rss_fallback
+  # 표 정의·관리자 정책·공개 권한은 staruniv/supabase/staruniv.sql 한 곳. ststat.sql 6번은 수집용 인덱스·열 설명만.
+  schema: staruniv/supabase/staruniv.sql
   reads_tables:
     - video_channels
     - videos
