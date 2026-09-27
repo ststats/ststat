@@ -63,3 +63,14 @@ def test_anon_gets_only_the_columns_pages_read():
     assert not {"wins", "last_match_date"} & grants["elo_public_players"]
     for hidden in ("elo_player_matches", "elo_player_stats", "elo_h2h_stats", "elo_matches", "rounds_effective"):
         assert hidden not in grants
+
+
+def test_list_functions_read_as_the_caller_and_only_granted_views():
+    """긴 목록 함수는 anon 권한 그대로 읽는다(security invoker) - 열 권한·행 정책을 넘지 않는다."""
+    sql = SQL
+    for name in ('elo_players_list', 'elo_player_match_list', 'elo_rankings_list', 'elo_player_ratings_list'):
+        body = re.search(rf"create or replace function public\.{name}\(.*?\$\$(.*?)\$\$;", sql, re.S)
+        assert body, name
+        header = sql[body.start():body.start(1)]
+        assert 'security invoker' in header and 'security definer' not in header, name
+        assert re.search(rf"grant execute on function .*public\.{name}\(", sql, re.S), name
