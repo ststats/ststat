@@ -42,3 +42,19 @@ def test_live_status_collects_member_posts_every_run():
     ts = Path("supabase/functions/live-status/index.ts").read_text(encoding="utf-8")
     assert "const POSTS_EVERY_MS = 90 * 1000;" in ts
     assert 'rpc("replace_member_posts"' in ts
+
+
+def test_anon_gets_only_the_columns_pages_read():
+    """익명 조회는 14번 한 곳에서 열 단위로만 준다(화면에 나오는 것만)."""
+    head, contract = SQL.split("-- 14. 익명(anon) 공개 범위", 1)
+    # 앞 절들은 anon에게 표·뷰 전체를 주지 않는다
+    assert not re.search(r"grant select on (table )?public\.[\w, .]+ to anon", head)
+    assert "public.rounds_effective, public.sync_jobs from anon;" in contract
+    grants = dict(re.findall(r"grant select \(([^)]+)\) on public\.(\w+) to anon;", contract.replace("\n  ", "")))
+    grants = {table: set(cols.split(",")) for cols, table in grants.items()}
+    assert "month_start" not in grants["daily_member_stats"]
+    assert grants["synergy_daily_dates"] == {"stat_date"}
+    assert grants["elo_rankings"] == {"elo_id", "raw_rating", "rating", "tier", "tier_rank", "tier_count", "as_of"}
+    assert "scanned_at" not in grants["live_broadcasts_current"]
+    for hidden in ("elo_player_matches", "elo_player_stats", "elo_h2h_stats", "elo_matches", "rounds_effective"):
+        assert hidden not in grants
