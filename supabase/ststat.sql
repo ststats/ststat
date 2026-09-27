@@ -316,6 +316,34 @@ grant select on public.elo_derived_snapshots, public.elo_player_stats, public.el
   public.elo_race_stats, public.elo_rankings, public.elo_ranking_meta, public.elo_rating_history to anon, authenticated;
 grant select on public.elo_player_matches to anon, authenticated;
 
+-- 파생 계산 입력의 지문. 파이프라인은 하루 여러 번 돌지만 경기·선수·형식·티어표가 그대로면 결과도 같다.
+-- calculate_eloboard_stats가 이 값을 활성 스냅샷의 것과 비교해 같으면 수십만 행을 다시 읽지 않고 건너뛴다
+-- (Egress·로그 절약). 행마다 해시를 더하는 방식이라 순서와 무관하고 표를 한 번씩만 훑는다.
+-- 행을 통째로 글자로 바꿔 해시하므로(NULL 자리도 구분됨) 어느 칸이 바뀌어도 값이 달라진다.
+create or replace function public.elo_derived_source_signature()
+returns text
+language sql
+stable
+set search_path = public
+as $$
+  select concat_ws(':',
+    (select count(*) || '/' || coalesce(sum(hashtextextended(r::text, 0)::numeric), 0)
+       from (select elo_match_id, match_date, winner_elo_id, loser_elo_id, map_id, category_id
+               from public.elo_matches) r),
+    (select count(*) || '/' || coalesce(sum(hashtextextended(r::text, 0)::numeric), 0)
+       from (select elo_id, name, race from public.elo_players) r),
+    (select count(*) || '/' || coalesce(sum(hashtextextended(r::text, 0)::numeric), 0)
+       from (select category_id, name from public.elo_categories) r),
+    (select count(*) || '/' || coalesce(sum(hashtextextended(r::text, 0)::numeric), 0)
+       from (select elo_id, nickname, name, soop_id, tier, affiliation, race,
+                    promoted_tier_0, promoted_tier_1, promoted_tier_2, promoted_tier_3, promoted_tier_4,
+                    promoted_tier_5, promoted_tier_6, promoted_tier_7, promoted_tier_8
+               from public.tier_members) r)
+  );
+$$;
+revoke all on function public.elo_derived_source_signature() from public, anon, authenticated;
+grant execute on function public.elo_derived_source_signature() to service_role;
+
 
 -- ############################################################################
 -- 5. 시너지 월간·일별 방송 통계

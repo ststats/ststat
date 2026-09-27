@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import time
+from pathlib import Path
 
 from models.sync_job import JobResult
 from processors.eloboard_derived import build_payload, history_cache_metadata
@@ -9,10 +11,24 @@ from repositories.derived_stats import (
     cleanup_old_snapshots,
     create_snapshot,
     load_active_history_cache,
+    load_active_snapshot,
     load_source_data,
+    load_source_signature,
     mark_failed,
     write_snapshot,
 )
+
+
+# 계산 코드가 바뀌면 입력이 같아도 다시 계산해야 하므로 지문에 코드도 넣는다(줄바꿈 차이는 무시).
+_CODE_FILES = ('processors/eloboard_derived.py', 'processors/staruniv_ranking.py')
+
+
+def _code_fingerprint() -> str:
+    root = Path(__file__).resolve().parents[1]
+    digest = hashlib.sha256()
+    for rel in _CODE_FILES:
+        digest.update((root / rel).read_bytes().replace(b'\r\n', b'\n'))
+    return digest.hexdigest()[:16]
 
 
 def run() -> JobResult:
@@ -32,6 +48,21 @@ def run() -> JobResult:
     except Exception as exc:
         print(f"pre-run snapshot cleanup skipped: {exc}")
 
+    # 경기·선수·티어표와 계산 코드가 지난 활성 스냅샷 때와 같으면 결과도 같다 - 수십만 행을 읽지 않고 끝낸다.
+    db_signature = load_source_signature()
+    source_signature = f'{db_signature}#{_code_fingerprint()}' if db_signature else None
+    if source_signature:
+        active = load_active_snapshot()
+        if active and (active.get('metadata') or {}).get('source_signature') == source_signature:
+            lap('signature_seconds')
+            return JobResult(
+                records_skipped=1,
+                source_cursor=str(active.get('as_of') or ''),
+                metadata={'skipped': 'source unchanged', 'snapshot_id': active['snapshot_id'],
+                          'timings': timings},
+            )
+    lap('signature_seconds')
+
     source = load_source_data()
     lap('load_seconds')
     match_count = len(source['matches'])
@@ -50,6 +81,7 @@ def run() -> JobResult:
             'ranking_algorithm': 'staruniv_current_tier_delta_race_v4',
             'safe_swap': True,
             'history_cache_reused': bool(history_cache),
+            'source_signature': source_signature,
             **cache_metadata,
         },
     )

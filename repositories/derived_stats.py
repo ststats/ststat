@@ -48,7 +48,6 @@ def _paged(table: str, select: str = '*', order: str | None = None):
 def load_source_data():
     return {
         'categories': _paged('elo_categories', 'category_id,name', 'category_id'),
-        'maps': _paged('elo_maps', 'map_id,name', 'map_id'),
         'players': _paged('elo_players', 'elo_id,name,race', 'elo_id'),
         'matches': load_matches(),
         'tier_members': _paged(
@@ -154,6 +153,23 @@ def load_active_history_cache(expected_metadata: dict) -> dict | None:
         'months': months,
         'players': {pid: [values.get(month) for month in months] for pid, values in by_player.items()},
     }
+
+
+def load_source_signature() -> str | None:
+    """파생 계산 입력의 지문(ststat.sql 4절 elo_derived_source_signature). 함수가 아직 없거나 실패하면 None."""
+    try:
+        value = get_supabase().rpc('elo_derived_source_signature', {}).execute().data
+    except Exception as exc:
+        print(f'source signature unavailable, calculating anyway: {exc}')
+        return None
+    return str(value) if value else None
+
+
+def load_active_snapshot() -> dict | None:
+    """활성 스냅샷의 id·기준일·메타데이터(없으면 None)."""
+    rows = get_supabase().table('elo_derived_snapshots').select('snapshot_id,as_of,metadata').eq(
+        'status', 'active').limit(1).execute().data or []
+    return rows[0] if rows else None
 
 
 def create_snapshot(as_of: str, source_match_count: int, metadata: dict) -> str:
