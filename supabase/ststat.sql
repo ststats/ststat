@@ -4,7 +4,6 @@
 --   표·열·인덱스는 없을 때만 만들고, 함수·뷰·정책·권한은 최신으로 다시 쓴다. 운영 데이터는 바꾸지 않는다.
 -- StarUniv/Synergy가 함께 쓰는 DB다. StarUniv 기본 표(tier_members·elo_*·matches·rounds·videos,
 -- is_admin 등)는 staruniv 저장소 supabase/staruniv.sql이 만들므로 그 파일을 먼저 실행한다.
--- (예전 migrations/001~012를 순서대로 합쳤다. 012가 대신하는 010과 이미 끝난 일회성 데이터 채우기는 뺐다.)
 --
 -- 구성(순서대로):
 --   1 작업 기록 → 2 선수 후보 대기열 → 3 EloBoard 수집 보강 → 4 EloBoard 파생 통계(스냅샷 교체)
@@ -78,9 +77,9 @@ alter table public.tier_member_candidates
 alter table public.tier_member_candidates
   add column if not exists soop_id text;
 
--- 한 사람 = 한 줄(id 'elo:<ELO ID>'). 예전엔 티어 목록에서 온 선수는 SOOP ID를 id로 써서, 경기 기록에서 먼저
--- 'elo:<ELO ID>'로 올라온 같은 사람이 두 줄이 되거나, SOOP ID가 틀린 선수가 명단에 있는데도 계속 신규로 떴다.
--- 아래는 예전 행을 옮기는 정리이고, 다 옮긴 뒤에는 다시 실행해도 바뀌는 것이 없다.
+-- 한 사람 = 한 줄(id 'elo:<ELO ID>'). SOOP ID를 id로 쓰면 경기 기록에서 먼저 'elo:<ELO ID>'로 올라온
+-- 같은 사람이 두 줄이 되거나, SOOP ID가 틀린 선수가 명단에 있는데도 계속 신규로 뜬다.
+-- 아래는 SOOP ID를 id로 쓰던 행을 옮기는 정리이고, 다 옮긴 뒤에는 다시 실행해도 바뀌는 것이 없다.
 update public.tier_member_candidates set soop_id = id
 where id not like 'elo:%' and soop_id is null;
 
@@ -761,7 +760,7 @@ grant execute on function public.admin_dashboard_stats() to authenticated;
 -- Edge Function live-status(supabase/functions/live-status)가 SOOP 전체 방송 목록을 훑어
 -- tier_members에 있는 SOOP 아이디 중 방송 중인 사람만 이 표에 통째로 바꿔 넣는다.
 -- 사이트는 live_broadcasts_current(최근 5분 안에 갱신된 것만)를 바로 읽는다.
--- 수집이 멈추면 5분 뒤 전부 '방송 안 함'으로 보인다(예전 KV 4분 만료와 같은 역할).
+-- 수집이 멈추면 5분 뒤 전부 '방송 안 함'으로 보인다(멈춘 방송이 계속 켜져 보이지 않게).
 
 create table if not exists public.live_broadcasts (
     soop_id text primary key,

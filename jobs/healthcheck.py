@@ -1,7 +1,7 @@
 from models.sync_job import JobResult
 from repositories.supabase import get_supabase
 
-# 뒤 작업들이 쓰는 표·뷰. 하나라도 없으면 SQL(supabase/ststat.sql)이 안 돌았거나 옛 버전이다.
+# 뒤 작업들이 쓰는 표·뷰. 하나라도 없으면 SQL(supabase/ststat.sql)이 안 돌았거나 최신이 아니다.
 REQUIRED_TABLES = (
     "sync_jobs", "tier_members", "elo_players", "elo_matches", "elo_derived_snapshots",
     "elo_h2h_stats", "elo_player_ratings", "daily_member_stats", "poonggo_monthly_stats",

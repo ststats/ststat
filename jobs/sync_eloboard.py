@@ -22,9 +22,8 @@ from repositories.eloboard import (
 OVERLAP_DAYS = int(os.getenv("ELOBOARD_OVERLAP_DAYS", "3"))
 # 이미 받은 경기도 이번 달 1일부터는 매번 다시 읽는다.
 # EloBoard API는 경기를 '날짜 순서'로 준다. 며칠 늦게 등록된 경기는 ID는 크지만 날짜가
-# 옛날이라 목록 깊숙이 있어서, 최근 3일만 다시 읽으면 영영 못 받았다(2026-09 실측:
-# 9월 1,758판 중 197판 누락 · 먼진 EloBoard 32판 vs 시너지 19판). 예전 시너지 수집기도
-# 매번 그달 처음까지 거슬러 읽었다.
+# 지나서 목록 깊숙이 있다. 최근 며칠만 다시 읽으면 영영 못 받는다(2026-09 실측: 최근 3일만
+# 읽었더니 9월 1,758판 중 197판 누락).
 # 월초 PREV_MONTH_DAYS일 동안만 지난달 1일부터 읽는다 - 지난달 확정 집계가 이 무렵에
 # 돌기 때문이다. 그 뒤로는 이번 달만 읽어 수집 시간을 줄인다(한 달 ≈ 30페이지).
 PREV_MONTH_DAYS = int(os.getenv("ELOBOARD_PREV_MONTH_DAYS", "7"))
@@ -92,8 +91,8 @@ def run() -> JobResult:
             if date:
                 oldest = date if not oldest else min(oldest, date)
             # 목록은 경기 날짜순이라 ID 순서와 다르다: 지난 날짜로 늦게 등록된 경기는 뒤 페이지에
-            # 있으면서 ID가 더 크다. 예전엔 첫 페이지 최대 ID보다 큰 ID를 건너뛰어 그런 경기를
-            # 저장하지 않았고, 삭제 판정에서는 '사라진 경기'로 보기까지 했다. 본 경기는 모두 센다.
+            # 있으면서 ID가 더 크다. 첫 페이지 최대 ID로 자르면 그런 경기를 놓치고 삭제 판정에서
+            # '사라진 경기'로 보게 되므로, 본 경기는 모두 센다.
             seen_ids.add(rid)
             min_seen = rid if min_seen is None else min(min_seen, rid)
             if stop_at and rid <= stop_at:

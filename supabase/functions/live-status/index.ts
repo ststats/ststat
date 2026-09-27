@@ -1,7 +1,7 @@
 // 방송 중 표시(라이브) 수집 - Supabase Edge Function "live-status"
 //
 // SOOP 전체 방송 목록(시청자 많은 순)을 끝까지 훑어 tier_members에 있는 SOOP 아이디 중 방송 중인 사람만
-// public.live_broadcasts에 통째로 바꿔 넣는다. 예전 Cloudflare Worker + KV를 대신한다.
+// public.live_broadcasts에 통째로 바꿔 넣는다.
 // pg_cron이 2분마다 부른다(supabase/ststat.sql 12번 맨 아래).
 //
 // 배포: Supabase 대시보드 → Edge Functions → 새 함수 "live-status"에 이 파일을 붙여 넣고,
@@ -11,8 +11,8 @@
 // 같은 시각에 여러 번 불러도 50초에 한 번만 실제로 수집한다(try_begin_live_scan).
 //
 // 멤버 공지 모음(member_posts, ststat.sql 13번)도 여기서 채운다: 방송 중 수집 뒤(2분마다) 매번
-// 활동 중인 캄몬 멤버(members.left_date 없음)의 SOOP 게시판 첫 페이지(본인 글만)를 받아 둔다. 스타유니브 홈·멤버 공지가
-// 방문자마다 멤버 수만큼 SOOP API를 부르던 것을 이 표 한 번 조회로 바꾼다. 방송 중 수집이 실패해도 공지는 따로 모은다.
+// 활동 중인 캄몬 멤버(members.left_date 없음)의 SOOP 게시판 첫 페이지(본인 글만)를 받아 둔다. 스타유니브 홈·멤버 공지는
+// 방문자마다 멤버 수만큼 SOOP API를 부르지 않고 이 표를 한 번 조회한다. 방송 중 수집이 실패해도 공지는 따로 모은다.
 
 const PAGE_SIZE = 60;
 const MAX_PAGES = 150;

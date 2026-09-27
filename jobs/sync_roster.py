@@ -75,8 +75,8 @@ def run() -> JobResult:
     members = load_roster()
     if not members:
         raise RuntimeError("tier_members is empty; refusing to treat the whole API as new candidates")
-    # 같은 사람 판별: ELO ID가 먼저다. EloBoard에 SOOP ID가 틀리게 적힌 선수가 있어서, 예전처럼 SOOP ID로만
-    # 찾으면 명단에 있는 사람이 매번 '신규'로 대기 명단에 올라왔다. ELO ID가 없는 선수만 SOOP ID로 찾는다.
+    # 같은 사람 판별: ELO ID가 먼저다. EloBoard에 SOOP ID가 틀리게 적힌 선수가 있어서, SOOP ID로만
+    # 찾으면 명단에 있는 사람이 매번 '신규'로 대기 명단에 올라온다. ELO ID가 없는 선수만 SOOP ID로 찾는다.
     by_elo = {m.elo_id: m for m in members if m.elo_id is not None}
     by_soop = {m.soop_id.lower(): m for m in members if m.soop_id}
     # 종족 변경 등으로 생긴 다른 계정을 어드민에서 선수에 '연결'해 두면 그 ELO ID도 명단에 있는 사람이다
