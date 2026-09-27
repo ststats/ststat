@@ -656,8 +656,9 @@ drop policy if exists synergy_daily_admin_read on public.daily_member_stats;
 -- 행마다 그날의 소속이 들어 있어서, 지난 달에 대학 소속이었던 기록은 지금 휴면이어도 그대로 보인다.
 create policy synergy_daily_public_read on public.daily_member_stats
 for select to anon using (coalesce(affiliation, '') <> '휴면');
+-- 휴면 행까지 보는 것은 관리자만(로그인만 한 계정이 anon 규칙을 우회해 생일·성별을 읽지 못하게)
 create policy synergy_daily_admin_read on public.daily_member_stats
-for select to authenticated using (true);
+for select to authenticated using ((select public.is_admin()));
 grant select on public.daily_member_stats to anon, authenticated;
 
 create or replace view public.synergy_daily_dates
