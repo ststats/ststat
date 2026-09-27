@@ -25,3 +25,17 @@ def test_daily_stats_public_read_skips_dormant_rows():
 def test_live_broadcasts_public_read_only_displayed_players():
     policy = _block("create policy live_broadcasts_public_read", ");\n")
     assert "coalesce(tm.affiliation, '') <> '휴면'" in policy
+
+
+def test_member_posts_table_is_public_read_and_written_only_by_service_role():
+    assert "create table if not exists public.member_posts" in SQL
+    assert re.search(r"create policy member_posts_public_read on public\.member_posts\s+for select to anon, authenticated using \(true\);", SQL)
+    assert "revoke all on function public.replace_member_posts(jsonb, text[], text[]) from public, anon, authenticated;" in SQL
+    assert "grant execute on function public.replace_member_posts(jsonb, text[], text[]) to service_role;" in SQL
+
+
+def test_live_status_collects_member_posts_every_run():
+    from pathlib import Path
+    ts = Path("supabase/functions/live-status/index.ts").read_text(encoding="utf-8")
+    assert "const POSTS_EVERY_MS = 90 * 1000;" in ts
+    assert 'rpc("replace_member_posts"' in ts

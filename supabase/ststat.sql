@@ -10,7 +10,7 @@
 --   1 작업 기록 → 2 선수 후보 대기열 → 3 EloBoard 수집 보강 → 4 EloBoard 파생 통계(스냅샷 교체)
 --   → 5 시너지 월간·일별 방송 통계 → 6 영상 수집 → 7 경기·라운드 연결 점검 → 8 시너지 하루치 게시
 --   → 9 StarUniv·Synergy 공개 조회 → 10 티어랭킹 v4(모든 선수 레이팅·종족 상성) → 11 어드민 운영 현황
---   → 12 방송 중 표시(라이브)
+--   → 12 방송 중 표시(라이브) → 13 멤버 공지 모음
 
 
 -- ############################################################################
@@ -891,3 +891,60 @@ $cron$);
 select cron.schedule('live-status-log-cleanup', '17 4 * * *', $cron$
   delete from cron.job_run_details where end_time < now() - interval '3 days';
 $cron$);
+
+
+-- ############################################################################
+-- 13. 멤버 공지 모음(member_posts)
+-- ############################################################################
+-- 활동 중인 캄몬 멤버(members.left_date 없음)의 SOOP 게시판 첫 페이지(본인 글만)를 모아 둔다.
+-- live-status Edge Function이 방송 중 수집 뒤 매번(2분마다) 채운다 - 새 공지는 늦어도 2~4분 안에 뜬다. 스타유니브 홈 '최근 공지'와 멤버 '전체 공지'가
+-- 멤버마다 SOOP API를 부르던 것(17번)을 이 표 한 번 조회로 바꾼다. 더보기(2쪽부터)는 지금처럼 SOOP에 직접 묻는다.
+-- post는 화면이 쓰는 필드만 담은 SOOP 게시글(titleNo · titleName · regDate · userId · userNick · content ·
+-- display · count · photos). reg_date는 SOOP 형식 문자열("YYYY-MM-DD HH:MM:SS", 한국 시간) 그대로라 글자순이 곧 시간순이다.
+
+create table if not exists public.member_posts (
+  soop_id text not null,
+  title_no bigint not null,
+  reg_date text,
+  total_pages integer not null default 1,
+  post jsonb not null,
+  scanned_at timestamptz not null default now(),
+  primary key (soop_id, title_no)
+);
+create index if not exists member_posts_reg_date_idx on public.member_posts (reg_date desc);
+
+alter table public.member_posts enable row level security;
+drop policy if exists member_posts_public_read on public.member_posts;
+create policy member_posts_public_read on public.member_posts
+for select to anon, authenticated using (true);
+grant select on table public.member_posts to anon, authenticated;
+grant select, insert, update, delete on table public.member_posts to service_role;
+
+-- 받은 멤버(p_scanned)의 글은 새것으로 바꾸고, 활동 명단(p_active)에서 빠진 멤버의 글은 지운다.
+-- 이번에 못 받은 멤버의 글은 그대로 둔다(일시 오류로 공지가 사라지지 않게). 한 트랜잭션이다.
+create or replace function public.replace_member_posts(p_rows jsonb, p_scanned text[], p_active text[])
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  n integer;
+begin
+  delete from public.member_posts
+   where lower(soop_id) = any (select lower(x) from unnest(coalesce(p_scanned, '{}')) x)
+      or not (lower(soop_id) = any (select lower(x) from unnest(coalesce(p_active, '{}')) x));
+  insert into public.member_posts (soop_id, title_no, reg_date, total_pages, post, scanned_at)
+  select r.soop_id, r.title_no, r.reg_date, coalesce(r.total_pages, 1), r.post, now()
+  from jsonb_to_recordset(coalesce(p_rows, '[]'::jsonb)) as r(
+    soop_id text, title_no bigint, reg_date text, total_pages integer, post jsonb)
+  where coalesce(r.soop_id, '') <> '' and r.title_no is not null
+  on conflict (soop_id, title_no) do update
+    set reg_date = excluded.reg_date, total_pages = excluded.total_pages, post = excluded.post, scanned_at = now();
+  get diagnostics n = row_count;
+  return n;
+end;
+$$;
+
+revoke all on function public.replace_member_posts(jsonb, text[], text[]) from public, anon, authenticated;
+grant execute on function public.replace_member_posts(jsonb, text[], text[]) to service_role;

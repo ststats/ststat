@@ -9,6 +9,10 @@
 // 확인: 브라우저로 .../functions/v1/live-status?dry=1 을 열면 수집하지 않고 마지막 수집의 시각·쪽수·실패 수·찾은 수만
 //       보여 준다(누구나 부를 수 있으므로 SOOP에 요청하지 않고, 정기 수집의 50초 칸도 잡지 않는다).
 // 같은 시각에 여러 번 불러도 50초에 한 번만 실제로 수집한다(try_begin_live_scan).
+//
+// 멤버 공지 모음(member_posts, ststat.sql 13번)도 여기서 채운다: 방송 중 수집 뒤(2분마다) 매번
+// 활동 중인 캄몬 멤버(members.left_date 없음)의 SOOP 게시판 첫 페이지(본인 글만)를 받아 둔다. 스타유니브 홈·멤버 공지가
+// 방문자마다 멤버 수만큼 SOOP API를 부르던 것을 이 표 한 번 조회로 바꾼다. 방송 중 수집이 실패해도 공지는 따로 모은다.
 
 const PAGE_SIZE = 60;
 const MAX_PAGES = 150;
@@ -123,6 +127,85 @@ async function scanAllSOOP(wantedIds: Set<string>) {
   return { rows: [...found.values()], info };
 }
 
+// ---------------------------------------------------------------------------
+// 멤버 공지 모음
+// ---------------------------------------------------------------------------
+// 2분마다 부르는 방송 중 수집과 같은 주기로 모은다(새 공지가 늦어도 2~4분 안에 뜨게). 실행 시각이 몇 초씩
+// 어긋나도 한 번씩 건너뛰지 않게 90초로 잡는다(같은 시각 중복 실행은 try_begin_live_scan이 이미 막는다).
+const POSTS_EVERY_MS = 90 * 1000;
+const POSTS_PER_PAGE = 10;          // 사이트 fetchMemberFeed와 같은 쪽 크기(2쪽부터는 사이트가 SOOP에 직접 묻는다)
+
+async function loadActiveMemberIds(): Promise<string[]> {
+  const res = await fetch(
+    `${SUPABASE_URL}/rest/v1/members?select=soop_id&left_date=is.null&soop_id=not.is.null&limit=1000`,
+    { headers: DB_HEADERS },
+  );
+  if (!res.ok) throw new Error("멤버 목록 로드 실패: " + res.status);
+  const ids = new Set<string>();
+  for (const r of await res.json()) {
+    const id = String(r.soop_id || "").trim();
+    if (id) ids.add(id);
+  }
+  return [...ids];
+}
+
+async function lastPostsScanMs(): Promise<number> {
+  const res = await fetch(
+    `${SUPABASE_URL}/rest/v1/member_posts?select=scanned_at&order=scanned_at.desc&limit=1`,
+    { headers: DB_HEADERS },
+  );
+  if (!res.ok) throw new Error("공지 수집 시각 읽기 실패: " + res.status);
+  const rows = await res.json();
+  return rows[0]?.scanned_at ? Date.parse(rows[0].scanned_at) : 0;
+}
+
+// 사이트(soop.js mergeOwnPosts)와 같은 규칙: 일반글+공지 중 본인 글만, titleNo로 중복 제거.
+// 저장은 화면이 쓰는 필드만.
+function ownPosts(data: any, soopId: string) {
+  const owner = soopId.toLowerCase();
+  const all = [...(data?.contents || []), ...(data?.noticeData || [])]
+    .filter((p: any) => p && String(p.userId || "").toLowerCase() === owner);
+  const seen = new Set();
+  return all.filter((p: any) => (seen.has(p.titleNo) ? false : (seen.add(p.titleNo), true))).map((p: any) => ({
+    titleNo: p.titleNo,
+    titleName: p.titleName ?? null,
+    regDate: p.regDate ?? null,
+    userId: p.userId ?? null,
+    userNick: p.userNick ?? null,
+    content: p.content ? { textContent: p.content.textContent ?? "", content: p.content.content ?? "" } : null,
+    display: p.display ? { bbsName: p.display.bbsName ?? "" } : null,
+    count: p.count ? { likeCnt: p.count.likeCnt ?? 0, readCnt: p.count.readCnt ?? 0 } : null,
+    photos: Array.isArray(p.photos) ? p.photos.map((x: any) => ({ url: x?.url ?? "" })).filter((x: any) => x.url) : [],
+  }));
+}
+
+async function fetchBoard(soopId: string) {
+  const url = `https://api-channel.sooplive.com/v1.1/channel/${encodeURIComponent(soopId)}/board` +
+    `?perPage=${POSTS_PER_PAGE}&page=1`;
+  const res = await fetch(url, {
+    headers: { "User-Agent": "Mozilla/5.0", "Accept": "application/json" },
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+  });
+  if (!res.ok) throw new Error(`${soopId} 게시판 ${res.status}`);
+  const data = await res.json();
+  return { posts: ownPosts(data, soopId), totalPages: Number(data?.meta?.totalPages) || 1 };
+}
+
+async function refreshMemberPosts(force = false) {
+  if (!force && Date.now() - (await lastPostsScanMs()) < POSTS_EVERY_MS) return { skipped: true };
+  const ids = await loadActiveMemberIds();
+  if (ids.length === 0) throw new Error("활동 멤버가 없습니다.");
+  const results = await Promise.all(ids.map(id => fetchBoard(id).then(r => ({ id, ...r }), () => null)));
+  const ok = results.filter(Boolean) as { id: string; posts: any[]; totalPages: number }[];
+  // 절반 넘게 못 받으면 SOOP 쪽 문제로 보고 이번엔 바꾸지 않는다(지금 있는 공지를 지키기)
+  if (ok.length < ids.length / 2) throw new Error(`게시판 ${ids.length}명 중 ${ids.length - ok.length}명을 받지 못했습니다.`);
+  const rows = ok.flatMap(r => r.posts.map(post => ({
+    soop_id: r.id, title_no: post.titleNo, reg_date: post.regDate, total_pages: r.totalPages, post,
+  })));
+  const saved = await rpc("replace_member_posts", { p_rows: rows, p_scanned: ok.map(r => r.id), p_active: ids });
+  return { members: ids.length, fetched: ok.length, posts: saved };
+}
+
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -153,17 +236,27 @@ Deno.serve(async (req) => {
     return json({ skipped: true, reason: "50초 안에 이미 수집이 시작됨" });
   }
   let info: Record<string, unknown> = {};
+  let body: Record<string, unknown>;
+  let status = 200;
   try {
     const roster = await loadRosterIds();
     if (roster.size === 0) throw new Error("선수 목록이 비어 있습니다.");
     const scan = await scanAllSOOP(roster);
     info = { ...scan.info, roster: roster.size, ms: Date.now() - t0 };
     const saved = await rpc("replace_live_broadcasts", { p_rows: scan.rows, p_info: info });
-    return json({ success: true, live_count: saved, ...info });
+    body = { success: true, live_count: saved, ...info };
   } catch (e) {
     info = { ...info, ...((e as any).info || {}), ms: Date.now() - t0 };
     const msg = e instanceof Error ? e.message : String(e);
     try { await rpc("fail_live_scan", { p_error: msg, p_info: info }); } catch (_e) { /* 기록 실패는 무시 */ }
-    return json({ success: false, error: msg, ...info }, 500);
+    body = { success: false, error: msg, ...info };
+    status = 500;
   }
+  // 공지 모음은 방송 중 수집과 따로(한쪽이 실패해도 다른 쪽은 한다). ?posts=1이면 간격을 무시하고 바로 모은다.
+  try {
+    body.posts = await refreshMemberPosts(new URL(req.url).searchParams.get("posts") === "1");
+  } catch (e) {
+    body.posts = { error: e instanceof Error ? e.message : String(e) };
+  }
+  return json(body, status);
 });
