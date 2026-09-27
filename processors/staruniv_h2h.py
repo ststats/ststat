@@ -41,7 +41,6 @@ from collections import Counter
 from datetime import datetime, timedelta
 import json
 import os
-import re
 import shutil
 import sys
 

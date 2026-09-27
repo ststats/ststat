@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 
 from models.synergy_stats import MonthlyLiveStats, SponsorStats, SynergyRosterMember
 from repositories.supabase import get_supabase

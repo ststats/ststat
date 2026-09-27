@@ -1,4 +1,3 @@
-from pathlib import Path
 
 from processors.eloboard_derived import aggregate_source, player_ratings_from_index, rankings_from_index
 
