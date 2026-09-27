@@ -1022,3 +1022,43 @@ revoke all on function public.university_logo_shown(text) from public;
 grant execute on function public.university_logo_shown(text) to anon, authenticated;
 drop policy if exists university_logos_anon_read on public.university_logos;
 create policy university_logos_anon_read on public.university_logos for select to anon using (public.university_logo_shown(name));
+
+-- 긴 목록은 한 번에: 상대전적·분석·엔트리가 1000줄씩 여러 번 나눠 받던 목록을 요청 한 번으로 돌려준다.
+-- 결과는 {"c": [열 이름], "r": [[값, …], …]} (열 이름을 줄마다 반복하지 않아 작다). StarUniv api.js가 객체 배열로 바꾼다.
+-- security invoker라 부른 사람(anon)의 권한 그대로 읽는다 - 위 열 권한·행 정책을 넘지 않는다. 열을 바꾸면 위 grant도 같이 본다.
+create or replace function public.elo_players_list(p_ranked boolean default false) returns json
+language sql stable security invoker set search_path = public as $$
+  select json_build_object(
+    'c', case when p_ranked
+      then json_build_array('elo_id','elo_name','race','nickname','soop_id','tier','affiliation','total_games','tier_rank','tier_count','as_of')
+      else json_build_array('elo_id','elo_name','race','nickname','soop_id','tier','affiliation','total_games') end,
+    'r', coalesce((select json_agg(case when p_ranked
+      then json_build_array(elo_id,elo_name,race,nickname,soop_id,tier,affiliation,total_games,tier_rank,tier_count,as_of)
+      else json_build_array(elo_id,elo_name,race,nickname,soop_id,tier,affiliation,total_games) end order by elo_id)
+      from public.elo_public_players), '[]'::json));
+$$;
+create or replace function public.elo_player_match_list(p_elo_id integer, p_since date default null) returns json
+language sql stable security invoker set search_path = public as $$
+  select json_build_object(
+    'c', json_build_array('match_date','opponent_elo_id','won','map_id','map_name','category_name'),
+    'r', coalesce((select json_agg(json_build_array(match_date,opponent_elo_id,won,map_id,map_name,category_name) order by match_date desc)
+      from public.elo_public_matches where elo_id = p_elo_id and (p_since is null or match_date >= p_since)), '[]'::json));
+$$;
+create or replace function public.elo_rankings_list() returns json
+language sql stable security invoker set search_path = public as $$
+  select json_build_object(
+    'c', json_build_array('elo_id','raw_rating','rating','tier','tier_rank','as_of'),
+    'r', coalesce((select json_agg(json_build_array(elo_id,raw_rating,rating,tier,tier_rank,as_of) order by elo_id)
+      from public.elo_rankings), '[]'::json));
+$$;
+create or replace function public.elo_player_ratings_list() returns json
+language sql stable security invoker set search_path = public as $$
+  select json_build_object(
+    'c', json_build_array('elo_id','rating','rating_se'),
+    'r', coalesce((select json_agg(json_build_array(elo_id,rating,rating_se) order by elo_id)
+      from public.elo_player_ratings), '[]'::json));
+$$;
+revoke all on function public.elo_players_list(boolean), public.elo_player_match_list(integer, date),
+  public.elo_rankings_list(), public.elo_player_ratings_list() from public;
+grant execute on function public.elo_players_list(boolean), public.elo_player_match_list(integer, date),
+  public.elo_rankings_list(), public.elo_player_ratings_list() to anon, authenticated;
