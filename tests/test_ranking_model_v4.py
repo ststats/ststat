@@ -2,12 +2,8 @@
 from __future__ import annotations
 
 import datetime as dt
-import json
 import math
 import random
-import subprocess
-import sys
-from pathlib import Path
 
 import numpy as np
 
@@ -19,6 +15,7 @@ from processors.staruniv_ranking import (
     build_pairs,
     fit_delta,
     race_code,
+    rank,
     race_terms,
     solve_two_stage,
 )
@@ -141,7 +138,7 @@ def test_race_terms_sign_and_unknown_race():
     assert race_code('저그') == 'Z' and race_code('p') == 'P' and race_code('?') == ''
 
 
-def test_main_ranks_by_theta_and_exports_every_fitted_player(tmp_path):
+def test_rank_orders_by_theta_and_exports_every_fitted_player():
     """스크립트 전체를 돌려 순위가 θ 순서이고 순위 밖 선수도 θ가 나오는지 본다."""
     rng = random.Random(11)
     true = {str(100 + i): .36 + rng.gauss(0, .4) for i in range(12)}      # 4티어 12명
@@ -159,17 +156,8 @@ def test_main_ranks_by_theta_and_exports_every_fitted_player(tmp_path):
     players = {pid: {'n': f'p{pid}', 'r': 'TZP'[int(pid) % 3],
                      **({'t': '4' if pid.startswith('1') else '5'} if pid != '300' else {})}
                for pid in ids}
-    (tmp_path / 'data').mkdir()
-    (tmp_path / 'docs/data/h2h').mkdir(parents=True)
-    src = tmp_path / 'data/eloboard.json'
-    idx = tmp_path / 'docs/data/h2h/index.json'
-    src.write_text(json.dumps(store), encoding='utf-8')
-    idx.write_text(json.dumps({'players': players}), encoding='utf-8')
-    script = Path(__file__).resolve().parents[1] / 'processors' / 'staruniv_ranking.py'
-    subprocess.run([sys.executable, str(script), '--src', str(src), '--index', str(idx),
-                    '--db', str(tmp_path / 'none.json'), '--no-history'],
-                   cwd=tmp_path, check=True, capture_output=True)
-    out = json.loads(idx.read_text(encoding='utf-8'))
+    out = {'players': players}
+    rank(store, out, [], with_history=False)
     meta = out['ranking']
     assert 'backtest' not in meta
     assert set(meta['raceMatchup']) == set(RACE_PAIRS)

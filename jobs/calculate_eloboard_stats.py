@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import time
-from pathlib import Path
 
 from models.sync_job import JobResult
 from processors.eloboard_derived import build_payload, history_cache_metadata
@@ -36,12 +35,11 @@ def run() -> JobResult:
     source = load_source_data()
     lap('load_seconds')
     match_count = len(source['matches'])
-    processor_dir = Path(__file__).resolve().parents[1] / 'processors'
 
     cache_metadata = history_cache_metadata(source)
     history_cache = load_active_history_cache(cache_metadata)
     lap('history_cache_seconds')
-    payload = build_payload(source, processor_dir, history_cache=history_cache)
+    payload = build_payload(source, history_cache=history_cache)
     lap('compute_seconds')
     as_of = payload['ranking_meta']['as_of']
     snapshot_id = create_snapshot(

@@ -3,11 +3,8 @@ from __future__ import annotations
 from collections import defaultdict
 import calendar
 import hashlib
-from pathlib import Path
-import json
-import subprocess
-import sys
-import tempfile
+
+from processors.staruniv_ranking import build_index, rank
 
 
 # v4: 순위·이력이 θ-1.5SE에서 θ로 바뀌고, δ를 현재 티어로 맞추며 종족 상성이 들어갔다.
@@ -47,28 +44,9 @@ def history_cache_metadata(source: dict) -> dict:
     }
 
 
-def _write_json(path: Path, data):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, separators=(',', ':')), encoding='utf-8')
-
-
-def _tier_member_legacy(row: dict) -> dict:
-    out = {
-        'ELO ID': row.get('elo_id'),
-        '닉네임': row.get('nickname'),
-        '이름': row.get('name'),
-        'SOOP ID': row.get('soop_id'),
-        '티어': row.get('tier'),
-        '소속': row.get('affiliation'),
-        '종족': row.get('race'),
-        '수정일': row.get('modified_at'),
-    }
-    for n in range(9):
-        out[f'{n}티어 승급'] = row.get(f'promoted_tier_{n}')
-    return out
-
-
-def make_legacy_store(source: dict) -> dict:
+def compact_store(source: dict) -> dict:
+    """순위 계산용으로 줄인 전적: 형식 이름 목록(cats), 선수 {id: [이름, 종족]},
+    경기 행 [경기id, 날짜, 승자, 패자, 맵, 형식 번호](최신 경기가 앞). 승자·패자가 빈 경기는 뺀다."""
     categories = sorted(source['categories'], key=lambda x: int(x['category_id']))
     max_cat = max((int(x['category_id']) for x in categories), default=-1)
     cats = [''] * (max_cat + 1)
@@ -78,7 +56,6 @@ def make_legacy_store(source: dict) -> dict:
         str(r['elo_id']): [str(r.get('name') or ''), str(r.get('race') or '')]
         for r in source['players']
     }
-    maps = {str(r['map_id']): str(r.get('name') or '') for r in source['maps']}
     rows = [
         [
             int(r['elo_match_id']), str(r['match_date'])[:10], int(r['winner_elo_id']),
@@ -88,48 +65,7 @@ def make_legacy_store(source: dict) -> dict:
         if r.get('winner_elo_id') is not None and r.get('loser_elo_id') is not None
     ]
     rows.sort(key=lambda x: x[0], reverse=True)
-    return {
-        'synced_at': '', 'count': len(rows), 'cats': cats, 'maps': maps,
-        'players': players, 'rows': rows,
-    }
-
-
-def run_staruniv_algorithm(source: dict, processor_dir: Path,
-                           history_cache: dict | None = None) -> tuple[dict, dict]:
-    """Run the exact current StarUniv H2H/ranking implementation in an isolated temp tree.
-
-    The JSON files are temporary adapter artifacts only; Supabase remains the persisted output.
-    This keeps ranking semantics byte-for-byte close to StarUniv while Part 4 is migrated.
-    """
-    with tempfile.TemporaryDirectory(prefix='ststat-p4-') as td:
-        root = Path(td)
-        store = make_legacy_store(source)
-        _write_json(root / 'data/eloboard.json', store)
-        _write_json(root / 'data/db.json', {'tierMembers': [_tier_member_legacy(r) for r in source['tier_members']]})
-        if history_cache:
-            _write_json(root / 'docs/data/h2h/rating.json', history_cache)
-
-        subprocess.run(
-            # 파생 계산은 index.json만 읽는다(선수별 경기 파일은 옛 정적 사이트용이라 만들지 않는다)
-            [sys.executable, str(processor_dir / 'staruniv_h2h.py'), '--src', str(root / 'data/eloboard.json'),
-             '--index-only'],
-            cwd=root, check=True,
-        )
-        ranking_cmd = [
-            sys.executable, str(processor_dir / 'staruniv_ranking.py'),
-            '--src', str(root / 'data/eloboard.json'),
-            '--index', str(root / 'docs/data/h2h/index.json'),
-            '--db', str(root / 'data/db.json'),
-        ]
-        if history_cache:
-            ranking_cmd.append('--reuse-closed-history')
-        subprocess.run(
-            ranking_cmd,
-            cwd=root, check=True,
-        )
-        index = json.loads((root / 'docs/data/h2h/index.json').read_text(encoding='utf-8'))
-        rating = json.loads((root / 'docs/data/h2h/rating.json').read_text(encoding='utf-8'))
-        return index, rating
+    return {'cats': cats, 'players': players, 'rows': rows}
 
 
 def aggregate_source(source: dict) -> tuple[list[dict], list[dict], list[dict]]:
@@ -245,12 +181,13 @@ def history_rows(rating: dict) -> list[dict]:
     return out
 
 
-def build_payload(source: dict, processor_dir: Path,
-                  history_cache: dict | None = None) -> dict:
+def build_payload(source: dict, history_cache: dict | None = None) -> dict:
     if not source['matches'] or not source['players']:
         raise RuntimeError('EloBoard source tables are empty; refusing to calculate derived snapshot')
     player_stats, h2h, race_stats = aggregate_source(source)
-    index, rating = run_staruniv_algorithm(source, processor_dir, history_cache)
+    store = compact_store(source)
+    index = build_index(store, source['tier_members'])
+    rating = rank(store, index, source['tier_members'], history_cache)
     rankings, ranking_meta = rankings_from_index(index)
     history = history_rows(rating)
     player_ratings = player_ratings_from_index(index)

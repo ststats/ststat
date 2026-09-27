@@ -1,8 +1,7 @@
 """티어 안 순위(티어랭킹)를 계산한다.
 
-processors/eloboard_derived.py가 임시 폴더에서 staruniv_h2h.py로 index.json을 만든 뒤 이 스크립트를
-돌리고(그 파일에 순위 필드를 덧붙이고 rating.json을 만든다), 결과를 Supabase 파생 표(elo_rankings 등)에
-저장한다. 아래 파일 경로(data/·docs/)는 그 임시 폴더 안의 어댑터 파일이다.
+processors/eloboard_derived.py가 build_index()로 선수 목록을 만들고 rank()로 순위·월별 이력을 계산해
+Supabase 파생 표(elo_rankings 등)에 저장한다.
 
 [현재 사양] - 값을 바꾸면 여기와 해당 상수 주석을 같이 고친다
   · 개인 폼(δ) 반감기 HALF_LIFE_DAYS = 90일, 티어 기준선(m) 반감기 HALF_LIFE_TIER_DAYS = 540일
@@ -103,29 +102,17 @@ processors/eloboard_derived.py가 임시 폴더에서 staruniv_h2h.py로 index.j
 수렴 판정을 옵티마이저에 맡기려고 L-BFGS를 쓴다.
 """
 
-import argparse
 import bisect
 import datetime as dt
-import io
 import re
-import json
 import math
-import os
-import sys
 
 import numpy as np
 from scipy.optimize import minimize
 
-SRC_PATH = os.path.join('data', 'eloboard.json')
-INDEX_PATH = os.path.join('docs', 'data', 'h2h', 'index.json')
-# 티어별 승급일이 들어 있는 원본. 월별 그래프에서 '그 달의 티어'를 되살리는 데 쓴다.
-DB_PATH = os.path.join('data', 'db.json')
-# 레이팅 변화 그래프용. 분석 탭에서만 읽으므로 index.json과 따로 둔다(티어표만 보러 온
-# 사람이 받지 않게).
-HISTORY_PATH = os.path.join('docs', 'data', 'h2h', 'rating.json')
-HISTORY_MONTHS = 18         # 월별 전적 그래프와 같은 개월 수
+HISTORY_MONTHS = 18         # 레이팅 변화 그래프 개월 수(월별 전적 그래프와 같다)
 
-# 티어 사다리. build_h2h.py / core.js의 TIER_ORDER와 같은 순서여야 한다.
+# 티어 사다리. 스타유니브 core.js의 SITE_ORDER.tiers, 시너지 app.js.j2의 TIER_ORDER와 같은 순서여야 한다.
 TIER_ORDER = ['갓', '킹', '잭', '조커', '스페이드', '0', '1', '2', '3', '4', '5', '6', '7', '8', '베이비']
 # 아직 티어를 안 매긴 사람(체크)과 티어표 밖 상대. 순위는 안 내지만 노드로는 넣는다 -
 # 이 사람들과의 경기도 실력 정보이고, 티어 간 연결을 조금이나마 더 이어준다.
@@ -134,7 +121,7 @@ UNRANKED = '미분류'
 # 정보다) 순위에는 올리지 않는다 - 지금 뛰는 사람들의 줄 세우기여야 하기 때문.
 DORMANT_TEAM = '휴면'
 
-# 형식 가중치. 키는 EloBoard 원본 코드(staruniv_h2h.py의 CAT_LABELS와 같다).
+# 형식 가중치. 키는 EloBoard 원본 형식 코드(elo_categories.name).
 # 값은 시계열 홀드아웃으로 정했다. 두 가지를 따로 물어봤다.
 #
 # (1) 한 판당 대회가 스폰보다 실력을 더 말해주나? -> 그렇다.
@@ -249,19 +236,91 @@ SCORE_SCALE = 400.0 / math.log(10)
 SCORE_BASE = 1500.0
 
 
-def load_json(path):
-    with io.open(path, encoding='utf-8') as f:
-        return json.load(f)
-
-
 def tier_of(entry):
-    """index.json의 선수 한 명에서 티어를 꺼낸다. 사다리에 없는 값은 전부 미분류."""
+    """선수 목록(build_index)의 한 명에서 티어를 꺼낸다. 사다리에 없는 값은 전부 미분류."""
     t = str((entry or {}).get('t') or '').strip()
     return t if t in TIER_ORDER else UNRANKED
 
 
-def load_ladders(path, players):
-    """db.json의 'N티어 승급' 날짜로 선수별 티어 사다리를 만든다.
+def _cell(row, key):
+    # 0 같은 값도 빈 값으로 취급하지 않도록 None만 빈 문자열로 바꾼다.
+    v = row.get(key)
+    return '' if v is None else str(v).strip()
+
+
+def tier_member_entries(tier_rows):
+    """tier_members 행을 잇기용 {id(SOOP ID), nickname, elo_id, team, tier, race}로. 닉네임 없는 행은 뺀다.
+    시너지 명단과 달리 휴면·FA까지 다 들어 있다(휴면은 상대로는 계산에 넣고 순위에만 안 올린다)."""
+    out = []
+    for r in tier_rows:
+        nickname = _cell(r, 'nickname') or _cell(r, 'name')
+        if not nickname:
+            continue
+        out.append({'id': _cell(r, 'soop_id'), 'nickname': nickname, 'elo_id': _cell(r, 'elo_id'),
+                    'team': _cell(r, 'affiliation'), 'tier': _cell(r, 'tier'), 'race': _cell(r, 'race')})
+    return out
+
+
+def link_tier_players(players, tier_members):
+    """티어표 명단 ↔ eloboard 선수 잇기: 명단의 ELO ID(메인 계정)로만 잇는다.
+    이름으로는 잇지 않는다 - EloBoard는 한 사람의 계정을 '진땅콩.', '진땅콩..'처럼 이름만 살짝 바꿔
+    여러 개 두므로 이름으로 맞추면 엉뚱한 계정에 티어가 붙는다.
+    돌려주는 값: (linked: {pid: {n,tm,s,t?}}, missing: [명단에 있는데 못 찾은 닉네임, ...])."""
+    linked = {}
+    missing = []
+    for m in tier_members:
+        pid = m['elo_id'] if m.get('elo_id') and m['elo_id'] in players else ''
+        if not pid:
+            missing.append(m['nickname'])
+            continue
+        # 이름은 티어표 닉네임을 쓴다 - 사이트 다른 화면과 같은 이름으로 보이게.
+        linked[pid] = {'n': m['nickname'], 'tm': m['team'], 's': m['id'],
+                       **({'t': m['tier']} if m['tier'] not in (None, '') else {})}
+    if tier_members:
+        print(f'  잇기: elo_id {len(linked)}명 · 못 찾음(ELO ID 없음·EloBoard에 없음) {len(missing)}명 (명단 {len(tier_members)}명)')
+    return linked, missing
+
+
+def _pid_sort_key(pid):
+    try:
+        return (0, int(pid))
+    except (TypeError, ValueError):
+        return (1, str(pid))
+
+
+def build_index(store, tier_rows):
+    """순위 계산 대상 선수 목록: 티어표에 이어진 선수 중 경기가 한 판이라도 있는 사람.
+    store는 eloboard_derived.compact_store() 결과
+    (players: {id: [이름, 종족]}, cats: [형식 코드], rows: [[경기id, 날짜, 승자, 패자, 맵, 형식 번호]]).
+    반환: {'players': {pid: {n, r, tm, s, t?}}} - rank()가 여기에 순위 필드를 덧붙인다."""
+    players = store.get('players') or {}
+    tier_members = tier_member_entries(tier_rows)
+    if not tier_members:
+        raise RuntimeError('Supabase tier_members is empty; refusing incomplete ranking build')
+    print(f'  명단: Supabase tier_members {len(tier_members):,}명')
+    linked, missing = link_tier_players(players, tier_members)
+    if not linked:
+        raise RuntimeError(f'티어표 명단({len(tier_members)}명)과 이어진 EloBoard 선수가 0명입니다 - '
+                           '명단의 ELO ID가 비어 있는지 확인하세요')
+    games = {}
+    for r in store.get('rows') or []:
+        if len(r) < 6:
+            continue
+        for pid in (str(r[2]), str(r[3])):
+            if pid in linked:
+                games[pid] = games.get(pid, 0) + 1
+    index_players = {}
+    for pid in sorted(games, key=_pid_sort_key):
+        info = players.get(pid) or ['', '']
+        index_players[pid] = {'n': info[0], 'r': (info[1] if len(info) > 1 else '') or '', **linked[pid]}
+    if missing:
+        print(f'   ℹ️ eloboard에서 못 찾은 티어표 선수 {len(missing)}명: {", ".join(missing[:15])}'
+              f'{" ..." if len(missing) > 15 else ""}')
+    return {'players': index_players}
+
+
+def load_ladders(tier_rows, players):
+    """tier_members의 promoted_tier_N('N티어 승급') 날짜로 선수별 티어 사다리를 만든다.
 
     월별 그래프는 지금까지 모든 과거 달에 '오늘의 티어'를 붙여 계산했다. 작년에
     8티어였던 사람의 작년 점수를 지금 7티어 기준선으로 재던 셈이라, 승급한 사람의
@@ -274,15 +333,11 @@ def load_ladders(path, players):
 
     반환: 선수id -> [(날짜, 티어), ...] (날짜 오름차순). 여기 없으면 오늘 티어를 쓴다.
     """
-    if not os.path.exists(path):
-        print(f'   ℹ️ {path} 가 없어 월별 그래프는 오늘 티어를 그대로 씁니다.')
-        return {}
-    rows = (load_json(path) or {}).get('tierMembers') or []
-    cols = [(str(i), f'{i}티어 승급') for i in range(9)]
+    cols = [(str(i), f'promoted_tier_{i}') for i in range(9)]
     out = {}
     skipped_mismatch = 0
-    for m in rows:
-        pid = str(m.get('ELO ID') or '').strip()
+    for m in tier_rows:
+        pid = str(m.get('elo_id') or '').strip()
         entry = players.get(pid)
         if not pid or entry is None:
             continue
@@ -768,31 +823,15 @@ def fit(wi, li, ww, win_tier_idx, lose_tier_idx, lam, n_players, n_tiers,
     return m, delta, race
 
 
-def main():
-    ap = argparse.ArgumentParser(description='티어 안 순위(티어랭킹) 계산')
-    ap.add_argument('--src', default=SRC_PATH, help=f'전적 아카이브 (기본 {SRC_PATH})')
-    ap.add_argument('--index', default=INDEX_PATH, help=f'상대전적 index.json (기본 {INDEX_PATH})')
-    ap.add_argument('--db', default=DB_PATH, help=f'승급일이 든 db.json (기본 {DB_PATH})')
-    ap.add_argument('--dry-run', action='store_true', help='파일에 쓰지 않고 결과만 찍는다')
-    ap.add_argument('--top', type=int, default=0, help='티어별 상위 N명을 찍어본다')
-    ap.add_argument('--no-history', action='store_true',
-                    help='레이팅 변화(월별 스냅샷) 계산을 건너뛴다')
-    ap.add_argument('--reuse-closed-history', action='store_true',
-                    help='기존 rating.json의 마감 월 결과를 재사용한다')
-    args = ap.parse_args()
-
-    if not os.path.exists(args.src) or not os.path.exists(args.index):
-        print(f'ℹ️ {args.src} 또는 {args.index} 가 없어 티어랭킹을 건너뜁니다.')
-        return 0
-
-    store = load_json(args.src)
-    index = load_json(args.index)
+def rank(store, index, tier_rows, history_cache=None, with_history=True):
+    """티어 안 순위를 매겨 index['players']에 순위 필드(k·rating·periodStats·dataTier·theta 등)를,
+    index['ranking']에 메타를 붙인다. with_history면 월별 레이팅 이력 {asOf, months, players}를 돌려준다.
+    history_cache는 지난 활성 스냅샷의 월별 이력(같은 형식) - 입력이 같은 마감 월은 다시 맞추지 않는다."""
     rows = store.get('rows') or []
     cats = store.get('cats') or []
     players = index.get('players') or {}
     if not rows or not players:
-        print('ℹ️ 전적이나 선수 목록이 비어 있어 티어랭킹을 건너뜁니다.')
-        return 0
+        raise RuntimeError('전적이나 선수 목록이 비어 있어 티어랭킹을 계산할 수 없습니다')
 
     # 기준일은 아카이브의 마지막 경기일로 잡는다. 오늘 날짜로 하면 수집이 며칠 밀렸을 때
     # 최근 가중치가 통째로 깎여서, 코드를 안 고쳤는데 순위가 흔들린다.
@@ -800,7 +839,7 @@ def main():
 
     tiers = TIER_ORDER + [UNRANKED]
     t_pos = {t: i for i, t in enumerate(tiers)}
-    ladders = load_ladders(args.db, players)
+    ladders = load_ladders(tier_rows, players)
 
     (wi, li, ww, ww_tier, win_tier_idx, lose_tier_idx,
      order, wsum, wsum_tier, last_day) = build_pairs(
@@ -876,12 +915,9 @@ def main():
         for rank, (_score, pid) in enumerate(lst, start=1):
             players[pid]['k'] = rank
 
-    # 다시 돌릴 때 옛 순위가 남지 않게, 이번에 순위를 못 받은 사람은 지운다.
     ranked_ids = {pid for lst in ranked.values() for _s, pid in lst}
 
-    # 어드민 랭킹의 기간 필터가 선수 샤드 100여 개를 매번 내려받지 않도록,
-    # 순위에 오른 선수만 최근 1년/90일/30일 전적을 index.json에 아주 작게 같이 넣는다.
-    # 값은 [경기수, 승수]. 전체 전적은 기존 m/w 필드를 그대로 쓴다.
+    # 어드민 랭킹의 기간 필터용: 순위에 오른 선수의 최근 1년/90일/30일 [경기수, 승수].
     period_days = (365, 90, 30)
     cutoffs = {days: today - dt.timedelta(days=days - 1) for days in period_days}
     period_stats = {pid: {days: [0, 0] for days in period_days} for pid in ranked_ids}
@@ -902,15 +938,8 @@ def main():
                     if won:
                         period_stats[pid][days][1] += 1
 
-    for pid, entry in players.items():
-        entry.pop('rankScore', None)
-        if pid in ranked_ids:
-            entry['periodStats'] = {str(days): period_stats[pid][days] for days in period_days}
-        else:
-            entry.pop('k', None)
-            entry.pop('rawRating', None)
-            entry.pop('rating', None)
-            entry.pop('periodStats', None)
+    for pid in ranked_ids:
+        players[pid]['periodStats'] = {str(days): period_stats[pid][days] for days in period_days}
 
     # 사람이 매긴 실제 티어와 전적 데이터가 가리키는 적합 티어의 차이를 저장한다.
     # 어드민 '티어 괴리' 표시는 이 값을 사용하고, 실제 순위는 기존처럼 현재 티어 안에서만 매긴다.
@@ -927,10 +956,6 @@ def main():
             gap = TIER_ORDER.index(t) - TIER_ORDER.index(fit_t)
             players[pid]['dataTier'] = fit_t
             players[pid]['tierGap'] = int(gap)
-    for pid, entry in players.items():
-        if pid not in ranked_ids:
-            entry.pop('dataTier', None)
-            entry.pop('tierGap', None)
 
     # 순위와 상관없이 맞춘 모든 선수의 θ와 표준오차(Elo 점수 단위). 엔트리 예상승률이
     # 순위 밖 선수(10판 미만, 미분류)에게도 티어 평균 대신 실제 추정치를 쓰게 한다.
@@ -941,9 +966,6 @@ def main():
         if fitted[k]:
             entry['theta'] = round(float(theta[k]) * SCORE_SCALE + SCORE_BASE, 1)
             entry['thetaSE'] = round(float(standard_error[k]) * SCORE_SCALE, 1)
-        else:
-            entry.pop('theta', None)
-            entry.pop('thetaSE', None)
 
     index['ranking'] = {
         'asOf': today.isoformat(),
@@ -991,48 +1013,10 @@ def main():
             arrow = '↑' if gap > 0 else '↓'
             print(f'      {nm} : {t}티어 → 데이터는 {fit_t}티어 {arrow}{abs(gap)}칸')
 
-    if args.top:
-        name = lambda pid: players[pid].get('n', pid)
-        print()
-        for t in TIER_ORDER:
-            if t not in ranked:
-                continue
-            head = ' · '.join(f'{i}위 {name(pid)}' for i, (_s, pid) in enumerate(ranked[t][:args.top], 1))
-            print(f'   {t:>4}티어: {head}')
-
-    if args.dry_run:
-        print('   (--dry-run: 파일에 쓰지 않았습니다)')
-        return 0
-
-    tmp = args.index + '.tmp'
-    with io.open(tmp, 'w', encoding='utf-8') as f:
-        json.dump(index, f, ensure_ascii=False, separators=(',', ':'))
-    os.replace(tmp, args.index)
-
-    if not args.no_history:
-        cached_payload = None
-        if args.reuse_closed_history and os.path.exists(HISTORY_PATH):
-            try:
-                cached_payload = load_json(HISTORY_PATH)
-            except (OSError, ValueError, TypeError) as exc:
-                print(f'   ⚠️ 월별 이력 캐시를 읽지 못해 전체 재계산합니다: {exc}')
-        months, series = build_history(
-            rows, cats, players, t_pos, len(tiers), today, ladders,
-            cached_payload, history_current_scores)
-        payload = {'asOf': today.isoformat(), 'months': months, 'players': series}
-        tmp = HISTORY_PATH + '.tmp'
-        with io.open(tmp, 'w', encoding='utf-8') as f:
-            json.dump(payload, f, ensure_ascii=False, separators=(',', ':'))
-        os.replace(tmp, HISTORY_PATH)
-        size = os.path.getsize(HISTORY_PATH) / 1024
-        print(f'✅ 레이팅 변화: {len(series):,}명 · {len(months)}개월 · {size:.0f}KB'
-              f' → {HISTORY_PATH}')
-    return 0
-
-
-if __name__ == '__main__':
-    # ✅·ℹ️ 같은 글자를 출력한다. Windows 기본 인코딩(cp949)에서는 출력만으로 죽으므로 UTF-8로 고정한다.
-    for stream in (sys.stdout, sys.stderr):
-        if hasattr(stream, 'reconfigure'):
-            stream.reconfigure(encoding='utf-8', errors='replace')
-    sys.exit(main())
+    if not with_history:
+        return None
+    months, series = build_history(
+        rows, cats, players, t_pos, len(tiers), today, ladders,
+        history_cache or None, history_current_scores)
+    print(f'✅ 레이팅 변화: {len(series):,}명 · {len(months)}개월')
+    return {'asOf': today.isoformat(), 'months': months, 'players': series}
