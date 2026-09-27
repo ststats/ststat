@@ -312,9 +312,10 @@ begin
   end loop;
 end $$;
 
+-- 익명(anon) 공개 범위는 14번에서 열 단위로 정한다.
 grant select on public.elo_derived_snapshots, public.elo_player_stats, public.elo_h2h_stats,
-  public.elo_race_stats, public.elo_rankings, public.elo_ranking_meta, public.elo_rating_history to anon, authenticated;
-grant select on public.elo_player_matches to anon, authenticated;
+  public.elo_race_stats, public.elo_rankings, public.elo_ranking_meta, public.elo_rating_history to authenticated;
+grant select on public.elo_player_matches to authenticated;
 
 -- 파생 계산 입력의 지문. 파이프라인은 하루 여러 번 돌지만 경기·선수·형식·티어표가 그대로면 결과도 같다.
 -- calculate_eloboard_stats가 이 값을 활성 스냅샷의 것과 비교해 같으면 수십만 행을 다시 읽지 않고 건너뛴다
@@ -502,8 +503,7 @@ where trim(coalesce(r.opponent_team, '')) = '내전'
 comment on view public.rounds_effective is
   'Read-only canonical rounds view. Includes one mirrored row for each internal round; base public.rounds is never duplicated or rewritten.';
 
--- Intentionally no anonymous grant yet.
--- StarUniv still uses its current frontend fallback during validation.
+-- 익명 조회는 주지 않는다(14번에서 회수). StarUniv 전적은 빌드가 만든 site_records.json을 쓴다.
 
 
 -- ############################################################################
@@ -646,7 +646,7 @@ from public.elo_player_matches pm
 left join public.elo_maps mp on mp.map_id=pm.map_id
 left join public.elo_categories c on c.category_id=pm.category_id;
 
-grant select on public.elo_public_players, public.elo_public_matches to anon, authenticated;
+grant select on public.elo_public_players, public.elo_public_matches to authenticated;
 
 alter table public.daily_member_stats enable row level security;
 drop policy if exists synergy_daily_public_read on public.daily_member_stats;
@@ -659,7 +659,7 @@ for select to anon using (coalesce(affiliation, '') <> '휴면');
 -- 휴면 행까지 보는 것은 관리자만(로그인만 한 계정이 anon 규칙을 우회해 생일·성별을 읽지 못하게)
 create policy synergy_daily_admin_read on public.daily_member_stats
 for select to authenticated using ((select public.is_admin()));
-grant select on public.daily_member_stats to anon, authenticated;
+grant select on public.daily_member_stats to authenticated;
 
 create or replace view public.synergy_daily_dates
 with (security_invoker = true)
@@ -669,7 +669,7 @@ from public.daily_member_stats
 group by stat_date
 order by stat_date desc;
 
-grant select on public.synergy_daily_dates to anon, authenticated;
+grant select on public.synergy_daily_dates to authenticated;
 
 
 -- ############################################################################
@@ -703,7 +703,7 @@ alter table public.elo_player_ratings enable row level security;
 drop policy if exists elo_player_ratings_public_read on public.elo_player_ratings;
 create policy elo_player_ratings_public_read on public.elo_player_ratings
   for select to anon, authenticated using (snapshot_id = (select public.active_elo_snapshot_id()));
-grant select on public.elo_player_ratings to anon, authenticated;
+grant select on public.elo_player_ratings to authenticated;
 
 
 -- ############################################################################
@@ -811,7 +811,7 @@ for select to anon, authenticated using (
   exists (select 1 from public.tier_members tm
           where tm.soop_id = live_broadcasts.soop_id and coalesce(tm.affiliation, '') <> '휴면')
 );
-grant select on table public.live_broadcasts to anon, authenticated;
+grant select on table public.live_broadcasts to authenticated;
 grant select, insert, update, delete on table public.live_broadcasts to service_role;
 
 create or replace view public.live_broadcasts_current
@@ -821,7 +821,7 @@ select soop_id, broad_no, broad_title, current_sum_viewer, broad_start, category
 from public.live_broadcasts
 where scanned_at > now() - interval '5 minutes';
 
-grant select on public.live_broadcasts_current to anon, authenticated;
+grant select on public.live_broadcasts_current to authenticated;
 
 -- 수집 상태 한 줄: 마지막 시작·성공 시각, 쪽수·실패 수 같은 요약, 마지막 오류
 create table if not exists public.live_scan_state (
@@ -945,7 +945,7 @@ alter table public.member_posts enable row level security;
 drop policy if exists member_posts_public_read on public.member_posts;
 create policy member_posts_public_read on public.member_posts
 for select to anon, authenticated using (true);
-grant select on table public.member_posts to anon, authenticated;
+grant select on table public.member_posts to authenticated;
 grant select, insert, update, delete on table public.member_posts to service_role;
 
 -- 받은 멤버(p_scanned)의 글은 새것으로 바꾸고, 활동 명단(p_active)에서 빠진 멤버의 글은 지운다.
@@ -976,3 +976,36 @@ $$;
 
 revoke all on function public.replace_member_posts(jsonb, text[], text[]) from public, anon, authenticated;
 grant execute on function public.replace_member_posts(jsonb, text[], text[]) to service_role;
+
+
+-- ############################################################################
+-- 14. 익명(anon) 공개 범위: 화면에 나오는 열만
+-- ############################################################################
+-- 두 사이트의 공개 페이지가 브라우저에서 실제로 조회하는 열(고르기·거르기·정렬에 쓰는 열 포함)만 anon에게 준다.
+-- Supabase는 public의 새 표·뷰에 anon 권한을 기본으로 주므로, 여기서 전부 회수한 뒤 필요한 열만 다시 준다.
+-- 행 범위는 각 표의 정책(휴면 제외, 활성 스냅샷만)이 정한다. StarUniv 기본 표는 staruniv.sql 2번이 같은 원칙으로 관리한다.
+-- 페이지가 새 열을 읽게 되면 여기에 더한다(없으면 그 조회가 권한 오류로 실패한다).
+revoke all on public.elo_derived_snapshots, public.elo_player_stats, public.elo_h2h_stats, public.elo_race_stats,
+  public.elo_rankings, public.elo_ranking_meta, public.elo_rating_history, public.elo_player_ratings,
+  public.elo_player_matches, public.elo_public_players, public.elo_public_matches,
+  public.elo_players, public.elo_matches, public.elo_maps, public.elo_categories,
+  public.daily_member_stats, public.synergy_daily_dates, public.poonggo_monthly_stats, public.synergy_month_confirmations,
+  public.live_broadcasts, public.live_broadcasts_current, public.live_scan_state, public.member_posts,
+  public.rounds_effective, public.sync_jobs from anon;
+
+-- 티어표 상대전적·분석·엔트리(page-h2h.js, page-analysis.js, page-entry.js)
+grant select on public.elo_public_players to anon;
+grant select (match_date,elo_id,opponent_elo_id,won,map_id,map_name,category_name) on public.elo_public_matches to anon;
+grant select (elo_id,raw_rating,rating,tier,tier_rank,tier_count,as_of) on public.elo_rankings to anon;
+grant select (as_of,tier_counts,tier_levels,race_matchup) on public.elo_ranking_meta to anon;
+grant select (elo_id,month_end,rating) on public.elo_rating_history to anon;
+grant select (elo_id,rating,rating_se) on public.elo_player_ratings to anon;
+-- 방송통계(StarUniv core.js)·시너지: 월 누적 시작일(month_start)만 쓰지 않는다
+grant select (stat_date,soop_id,elo_id,nickname,role,affiliation,race,tier,gender,birth_date,balloons,broadcast_seconds,
+  cumulative_viewers,sponsor_wins,sponsor_losses,updated_at,sponsor_updated_at) on public.daily_member_stats to anon;
+grant select (stat_date) on public.synergy_daily_dates to anon;
+-- 방송 중 표시: live_broadcasts_current는 security_invoker라 표의 열(거르는 scanned_at 포함)도 필요하다
+grant select (soop_id,broad_no,broad_title,current_sum_viewer,broad_start,category_name,broad_cate_no,scanned_at) on public.live_broadcasts to anon;
+grant select (soop_id,broad_no,broad_title,current_sum_viewer,broad_start,category_name,broad_cate_no) on public.live_broadcasts_current to anon;
+-- 멤버 공지(soop.js): 최신순 정렬에 reg_date를 쓴다
+grant select (soop_id,reg_date,total_pages,post) on public.member_posts to anon;
