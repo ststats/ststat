@@ -54,7 +54,12 @@ def test_anon_gets_only_the_columns_pages_read():
     grants = {table: set(cols.split(",")) for cols, table in grants.items()}
     assert "month_start" not in grants["daily_member_stats"]
     assert grants["synergy_daily_dates"] == {"stat_date"}
-    assert grants["elo_rankings"] == {"elo_id", "raw_rating", "rating", "tier", "tier_rank", "tier_count", "as_of"}
+    assert grants["elo_rankings"] == {"elo_id", "raw_rating", "rating", "tier", "tier_rank", "as_of"}
+    assert "elo_id" not in grants["daily_member_stats"]
+    # 대학 로고는 어느 화면에든 나오는 대학만
+    assert "create policy university_logos_anon_read on public.university_logos for select to anon using (public.university_logo_shown(name));" in contract
     assert "scanned_at" not in grants["live_broadcasts_current"]
+    # 선수 목록은 검색·요약 카드에 나오는 열만(승수·마지막 경기일은 화면에 없다)
+    assert not {"wins", "last_match_date"} & grants["elo_public_players"]
     for hidden in ("elo_player_matches", "elo_player_stats", "elo_h2h_stats", "elo_matches", "rounds_effective"):
         assert hidden not in grants

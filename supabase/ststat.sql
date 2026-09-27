@@ -994,14 +994,14 @@ revoke all on public.elo_derived_snapshots, public.elo_player_stats, public.elo_
   public.rounds_effective, public.sync_jobs from anon;
 
 -- 티어표 상대전적·분석·엔트리(page-h2h.js, page-analysis.js, page-entry.js)
-grant select on public.elo_public_players to anon;
+grant select (elo_id,elo_name,race,nickname,soop_id,tier,affiliation,total_games,tier_rank,tier_count,as_of) on public.elo_public_players to anon;
 grant select (match_date,elo_id,opponent_elo_id,won,map_id,map_name,category_name) on public.elo_public_matches to anon;
-grant select (elo_id,raw_rating,rating,tier,tier_rank,tier_count,as_of) on public.elo_rankings to anon;
+grant select (elo_id,raw_rating,rating,tier,tier_rank,as_of) on public.elo_rankings to anon;
 grant select (as_of,tier_counts,tier_levels,race_matchup) on public.elo_ranking_meta to anon;
 grant select (elo_id,month_end,rating) on public.elo_rating_history to anon;
 grant select (elo_id,rating,rating_se) on public.elo_player_ratings to anon;
--- 방송통계(StarUniv core.js)·시너지: 월 누적 시작일(month_start)만 쓰지 않는다
-grant select (stat_date,soop_id,elo_id,nickname,role,affiliation,race,tier,gender,birth_date,balloons,broadcast_seconds,
+-- 방송통계(StarUniv core.js)·시너지(대학 카드·프로필): stat_date는 날짜로 거르는 데 쓴다
+grant select (stat_date,soop_id,nickname,role,affiliation,race,tier,gender,birth_date,balloons,broadcast_seconds,
   cumulative_viewers,sponsor_wins,sponsor_losses,updated_at,sponsor_updated_at) on public.daily_member_stats to anon;
 grant select (stat_date) on public.synergy_daily_dates to anon;
 -- 방송 중 표시: live_broadcasts_current는 security_invoker라 표의 열(거르는 scanned_at 포함)도 필요하다
@@ -1009,3 +1009,16 @@ grant select (soop_id,broad_no,broad_title,current_sum_viewer,broad_start,catego
 grant select (soop_id,broad_no,broad_title,current_sum_viewer,broad_start,category_name,broad_cate_no) on public.live_broadcasts_current to anon;
 -- 멤버 공지(soop.js): 최신순 정렬에 reg_date를 쓴다
 grant select (soop_id,reg_date,total_pages,post) on public.member_posts to anon;
+
+-- 대학 로고: 어느 화면에든 나오는 대학만(전적 상대팀, 티어표 소속, 시너지 날짜별 대학). 표는 staruniv.sql 7번.
+create index if not exists daily_member_stats_affiliation_idx on public.daily_member_stats (affiliation);
+create or replace function public.university_logo_shown(p_name text) returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (select 1 from public.tier_members where affiliation = p_name and affiliation <> '휴면')
+      or exists (select 1 from public.matches where opponent_team = p_name)
+      or exists (select 1 from public.daily_member_stats where affiliation = p_name and affiliation <> '휴면');
+$$;
+revoke all on function public.university_logo_shown(text) from public;
+grant execute on function public.university_logo_shown(text) to anon, authenticated;
+drop policy if exists university_logos_anon_read on public.university_logos;
+create policy university_logos_anon_read on public.university_logos for select to anon using (public.university_logo_shown(name));
