@@ -588,7 +588,8 @@ select
   p.name as elo_name,
   coalesce(nullif(tm.race,''), p.race, '') as race,
   tm.nickname,
-  tm.soop_id,
+  -- 휴면 선수는 상대전적·분석에 이름·티어로는 나오지만 SOOP ID는 공개하지 않는다(운영 결정 2026-09-27)
+  case when tm.affiliation = '휴면' then null else tm.soop_id end as soop_id,
   tm.tier,
   tm.affiliation,
   ps.total_games,
@@ -622,9 +623,14 @@ grant select on public.elo_public_players, public.elo_public_matches to anon, au
 
 alter table public.daily_member_stats enable row level security;
 drop policy if exists synergy_daily_public_read on public.daily_member_stats;
--- 생일·성별 포함 전체 공개: 시너지 프로필에 표시한다(운영 결정 2026-09-26, staruniv.sql 2번 참고)
+drop policy if exists synergy_daily_admin_read on public.daily_member_stats;
+-- 생일·성별 포함 공개: 시너지 프로필에 표시한다(운영 결정 2026-09-26, staruniv.sql 2번 참고).
+-- 다만 그날 소속이 휴면인 행은 두 사이트 어디에도 나오지 않으므로 공개하지 않는다(운영 결정 2026-09-27).
+-- 행마다 그날의 소속이 들어 있어서, 지난 달에 대학 소속이었던 기록은 지금 휴면이어도 그대로 보인다.
 create policy synergy_daily_public_read on public.daily_member_stats
-for select to anon, authenticated using (true);
+for select to anon using (coalesce(affiliation, '') <> '휴면');
+create policy synergy_daily_admin_read on public.daily_member_stats
+for select to authenticated using (true);
 grant select on public.daily_member_stats to anon, authenticated;
 
 create or replace view public.synergy_daily_dates
@@ -770,8 +776,13 @@ create table if not exists public.live_broadcasts (
 
 alter table public.live_broadcasts enable row level security;
 drop policy if exists live_broadcasts_public_read on public.live_broadcasts;
+-- 방송 중 표시는 명단 전원(휴면 포함)을 훑어 채우지만, 공개는 사이트에 나오는 선수(휴면 아님)만.
+-- live_broadcasts_current는 security_invoker라 이 규칙을 그대로 따른다(운영 결정 2026-09-27).
 create policy live_broadcasts_public_read on public.live_broadcasts
-for select to anon, authenticated using (true);
+for select to anon, authenticated using (
+  exists (select 1 from public.tier_members tm
+          where tm.soop_id = live_broadcasts.soop_id and coalesce(tm.affiliation, '') <> '휴면')
+);
 grant select on table public.live_broadcasts to anon, authenticated;
 grant select, insert, update, delete on table public.live_broadcasts to service_role;
 
