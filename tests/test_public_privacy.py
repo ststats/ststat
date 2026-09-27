@@ -20,6 +20,9 @@ def test_daily_stats_public_read_skips_dormant_rows():
         r"create policy synergy_daily_public_read on public\.daily_member_stats\s+"
         r"for select to anon using \(coalesce\(affiliation, ''\) <> '휴면'\);", SQL)
     assert "for select to anon, authenticated using (true);\ngrant select on public.daily_member_stats" not in SQL
+    # 로그인한 계정 전체가 아니라 관리자만 휴면 행을 읽는다
+    assert re.search(r"create policy synergy_daily_admin_read on public\.daily_member_stats\s+"
+                     r"for select to authenticated using \(\(select public\.is_admin\(\)\)\);", SQL)
 
 
 def test_live_broadcasts_public_read_only_displayed_players():
