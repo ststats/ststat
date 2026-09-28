@@ -5,10 +5,13 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
+from postgrest.types import ReturnMethod
+
 from repositories.supabase import get_supabase, new_supabase
 
 PAGE = 1000
 MATCH_COLUMNS = 'elo_match_id,match_date,winner_elo_id,loser_elo_id,map_id,category_id'
+MATCH_KEYS = MATCH_COLUMNS.split(',')
 # 경기 전체(수십만 행)를 ID 구간으로 나눠 동시에 읽는다. 구간을 일꾼 수보다 잘게 나눠
 # ID가 고르게 퍼지지 않아도 한 일꾼에 일이 몰리지 않게 한다.
 LOAD_WORKERS = 6
@@ -74,6 +77,22 @@ def _load_match_range(after: int, upto: int) -> list[dict]:
         after = rows[-1]['elo_match_id']
 
 
+def _load_match_range_compact(after: int, upto: int) -> list[dict]:
+    """(after, upto] 구간을 elo_matches_compact(ststat.sql 4절)로 한 번에 읽는다(1000행 제한 없음)."""
+    data = _thread_client().rpc('elo_matches_compact', {'p_after': after, 'p_upto': upto}).execute().data
+    return [dict(zip(MATCH_KEYS, row)) for row in data or []]
+
+
+def _compact_available(db, low: int) -> bool:
+    """elo_matches_compact가 DB에 있는지. 최신 SQL을 아직 안 돌렸으면 표를 페이지로 읽는다."""
+    try:
+        db.rpc('elo_matches_compact', {'p_after': low - 1, 'p_upto': low - 1}).execute()
+        return True
+    except Exception as exc:
+        print(f'elo_matches_compact unavailable, reading pages: {exc}')
+        return False
+
+
 def _split_ranges(low: int, high: int, parts: int) -> list[tuple[int, int]]:
     """low..high(포함)를 겹치지 않는 (after, upto] 구간들로 나눈다."""
     span = high - low + 1
@@ -100,8 +119,9 @@ def _load_matches_once() -> list[dict]:
     high = db.table('elo_matches').select('elo_match_id').order(
         'elo_match_id', desc=True).limit(1).execute().data[0]['elo_match_id']
 
+    load = _load_match_range_compact if _compact_available(db, low) else _load_match_range
     with ThreadPoolExecutor(LOAD_WORKERS) as pool:
-        parts = list(pool.map(lambda r: _load_match_range(*r), _split_ranges(low, high, LOAD_RANGES)))
+        parts = list(pool.map(lambda r: load(*r), _split_ranges(low, high, LOAD_RANGES)))
     rows = [row for part in parts for row in part]  # 구간이 오름차순이라 합친 결과도 ID 순서다
 
     # 한 페이지라도 덜 받거나(서버 행 제한 등) 겹쳐 받으면 계산이 틀어지므로 정확한 행 수와 맞춰 본다.
@@ -134,16 +154,21 @@ def load_active_history_cache(expected_metadata: dict) -> dict | None:
         return None
 
     snapshot_id = row['snapshot_id']
-    history = []
-    start = 0
-    while True:
-        batch = db.table('elo_rating_history').select('elo_id,month_end,rating').eq(
+
+    def page(start, count=None):
+        return _thread_client().table('elo_rating_history').select('elo_id,month_end,rating', count=count).eq(
             'snapshot_id', snapshot_id).order('month_end').order('elo_id').range(
-                start, start + PAGE - 1).execute().data or []
-        history.extend(batch)
-        if len(batch) < PAGE:
-            break
-        start += PAGE
+                start, start + PAGE - 1).execute()
+
+    # 첫 페이지로 전체 행 수를 알고, 나머지 페이지는 동시에 읽는다(수천 행이라 차례로 읽으면 수 초 걸린다)
+    first = page(0, count='exact')
+    history = list(first.data or [])
+    total = first.count or len(history)
+    with ThreadPoolExecutor(LOAD_WORKERS) as pool:
+        for rows in pool.map(lambda start: page(start).data or [], range(PAGE, total, PAGE)):
+            history.extend(rows)
+    if len(history) != total:
+        return None                   # 읽는 도중 스냅샷이 바뀌었으면 캐시 없이 다시 계산한다
     months = sorted({str(r['month_end'])[:7] for r in history})
     by_player = {}
     for item in history:
@@ -192,7 +217,8 @@ def mark_failed(snapshot_id: str, error: str):
 
 
 def _insert_chunk(table: str, payload: list[dict]):
-    _thread_client().table(table).insert(payload).execute()
+    # 넣은 행을 되돌려받지 않는다(기본값은 전부 돌려받아 쓴 만큼 다시 내려받는다)
+    _thread_client().table(table).insert(payload, returning=ReturnMethod.minimal).execute()
 
 
 def _insert(table: str, rows: list[dict], snapshot_id: str, chunk: int = WRITE_CHUNK):

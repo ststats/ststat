@@ -13,6 +13,7 @@ class FakeQuery:
         self.db, self.table = db, table
         self.filters, self.orders = [], []
         self.count = self.lim = None
+        self.start = 0
         self.action, self.payload = 'select', None
 
     def select(self, cols, count=None):
@@ -43,8 +44,13 @@ class FakeQuery:
         self.lim = n
         return self
 
-    def insert(self, payload):
+    def range(self, start, end):
+        self.start, self.lim = start, end - start + 1
+        return self
+
+    def insert(self, payload, returning=None):
         self.action, self.payload = 'insert', payload
+        self.db.returning.add(returning)
         return self
 
     def update(self, payload):
@@ -72,19 +78,34 @@ class FakeQuery:
                 return SimpleNamespace(data=hit, count=None)
             for col, desc in reversed(self.orders):
                 hit.sort(key=lambda r: r[col], reverse=desc)
+            hit = hit[self.start:]
             limit = min([x for x in (self.lim, self.db.max_rows) if x is not None], default=None)
-            return SimpleNamespace(data=[dict(r) for r in hit[:limit]], count=len(hit) if self.count else None)
+            return SimpleNamespace(data=[dict(r) for r in hit[:limit]], count=len(hit) + self.start if self.count else None)
 
 
 class FakeDB:
-    def __init__(self, tables=None, max_rows=None):
+    def __init__(self, tables=None, max_rows=None, compact=False):
         self.tables = tables or {}
         self.max_rows = max_rows
+        self.compact = compact          # ststat.sql의 elo_matches_compact가 있는 DB인가
         self.lock = threading.Lock()
         self.threads = set()
+        self.returning = set()
+        self.rpc_calls = 0
 
     def table(self, name):
         return FakeQuery(self, name)
+
+    def rpc(self, name, params):
+        if name != 'elo_matches_compact' or not self.compact:
+            raise RuntimeError(f'Could not find the function public.{name}')
+        with self.lock:
+            self.rpc_calls += 1
+            rows = sorted((r for r in self.tables.get('elo_matches', [])
+                           if params['p_after'] < r['elo_match_id'] <= params['p_upto']),
+                          key=lambda r: r['elo_match_id'])
+        data = [[r[k] for k in repo.MATCH_KEYS] for r in rows]
+        return SimpleNamespace(execute=lambda: SimpleNamespace(data=data))
 
 
 def _matches(ids):
@@ -126,6 +147,23 @@ def test_load_fails_instead_of_returning_partial_data(fake, monkeypatch):
         repo.load_matches()
 
 
+def test_compact_function_returns_the_same_rows_in_one_call_per_range(fake):
+    ids = list(range(10, 3000, 7)) + list(range(50000, 53500)) + [99999]
+    table = _matches(reversed(ids))
+    table[0]['map_id'], table[1]['winner_elo_id'] = 7, None
+    db = fake(FakeDB({'elo_matches': table}, max_rows=300, compact=True))
+    rows = repo.load_matches()
+    assert rows == sorted((dict(r) for r in table), key=lambda r: r['elo_match_id'])
+    # 탐지 1번 + 구간마다 1번. 1000행(여기선 300행) 제한에 걸려 여러 번 읽지 않는다
+    assert db.rpc_calls <= 1 + repo.LOAD_RANGES
+
+
+def test_load_falls_back_to_pages_without_compact_function(fake):
+    db = fake(FakeDB({'elo_matches': _matches(range(1, 2001))}, max_rows=300))
+    assert [r['elo_match_id'] for r in repo.load_matches()] == list(range(1, 2001))
+    assert db.rpc_calls == 0
+
+
 def test_load_empty_table(fake):
     fake(FakeDB({'elo_matches': []}))
     assert repo.load_matches() == []
@@ -148,6 +186,21 @@ def test_insert_writes_every_row_in_chunks_with_snapshot_id(fake):
     assert sorted(r['n'] for r in stored) == list(range(2345))
     assert all(r['snapshot_id'] == 'snap' for r in stored)
     assert 'snapshot_id' not in rows[0]  # 원본은 건드리지 않는다
+    assert db.returning == {repo.ReturnMethod.minimal}  # 넣은 행을 되돌려받지 않는다
+
+
+def test_history_cache_reads_every_page(fake):
+    months = [f'2025-{m:02d}-28' for m in range(1, 13)]
+    history = [{'snapshot_id': 's1', 'elo_id': p, 'month_end': d, 'rating': 1500.0 + p}
+               for d in months for p in range(1, 301)]          # 3,600행 = 4페이지
+    meta = {'history_cache_version': 'v', 'closed_history_fingerprint': 'f'}
+    fake(FakeDB({'elo_derived_snapshots': [{'snapshot_id': 's1', 'status': 'active', 'metadata': meta}],
+                 'elo_rating_history': history}))
+    cache = repo.load_active_history_cache(meta)
+    assert cache['months'] == [d[:7] for d in months]
+    assert len(cache['players']) == 300
+    assert cache['players']['7'] == [1507.0] * 12
+    assert repo.load_active_history_cache(dict(meta, closed_history_fingerprint='x')) is None
 
 
 def test_insert_failure_propagates(fake, monkeypatch):

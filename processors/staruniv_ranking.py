@@ -112,7 +112,7 @@ from scipy.optimize import minimize
 
 HISTORY_MONTHS = 18         # 레이팅 변화 그래프 개월 수(월별 전적 그래프와 같다)
 
-# 티어 사다리. 스타유니브 core.js의 SITE_ORDER.tiers, 시너지 app.js.j2의 TIER_ORDER와 같은 순서여야 한다.
+# 티어 사다리. 스타유니브 core.js의 SITE_ORDER.tiers, 시너지 app.js의 TIER_ORDER와 같은 순서여야 한다.
 TIER_ORDER = ['갓', '킹', '잭', '조커', '스페이드', '0', '1', '2', '3', '4', '5', '6', '7', '8', '베이비']
 # 아직 티어를 안 매긴 사람(체크)과 티어표 밖 상대. 순위는 안 내지만 노드로는 넣는다 -
 # 이 사람들과의 경기도 실력 정보이고, 티어 간 연결을 조금이나마 더 이어준다.
