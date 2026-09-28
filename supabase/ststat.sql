@@ -345,6 +345,24 @@ $$;
 revoke all on function public.elo_derived_source_signature() from public, anon, authenticated;
 grant execute on function public.elo_derived_source_signature() to service_role;
 
+-- 파생 계산이 경기 전체(수십만 행)를 읽을 때 쓴다. (p_after, p_upto] 구간의 경기를
+-- [경기id, 날짜, 승자, 패자, 맵, 형식] 배열의 배열 하나로 준다. 표를 그대로 읽으면 한 번에 1000행
+-- 제한 때문에 수백 번 요청해야 하고 행마다 열 이름이 되풀이되는데, 이 함수는 구간당 한 번이면 된다.
+-- 함수가 없으면 파이프라인은 예전처럼 표를 페이지로 읽는다.
+create or replace function public.elo_matches_compact(p_after bigint, p_upto bigint)
+returns json
+language sql
+stable
+set search_path = public
+as $$
+  select coalesce(json_agg(json_build_array(elo_match_id, match_date, winner_elo_id, loser_elo_id,
+                                            map_id, category_id) order by elo_match_id), '[]'::json)
+    from public.elo_matches
+   where elo_match_id > p_after and elo_match_id <= p_upto;
+$$;
+revoke all on function public.elo_matches_compact(bigint, bigint) from public, anon, authenticated;
+grant execute on function public.elo_matches_compact(bigint, bigint) to service_role;
+
 
 -- ############################################################################
 -- 5. 시너지 월간·일별 방송 통계
