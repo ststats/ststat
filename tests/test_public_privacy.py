@@ -50,12 +50,17 @@ def test_anon_gets_only_the_columns_pages_read():
     # 앞 절들은 anon에게 표·뷰 전체를 주지 않는다
     assert not re.search(r"grant select on (table )?public\.[\w, .]+ to anon", head)
     assert "public.rounds_effective, public.sync_jobs from anon;" in contract
-    grants = dict(re.findall(r"grant select \(([^)]+)\) on public\.(\w+) to anon;", contract.replace("\n  ", "")))
-    grants = {table: set(cols.split(",")) for cols, table in grants.items()}
+    # 표 이름을 키로 모은다(열 목록이 같은 표가 둘이어도 겹치지 않게)
+    grants = {table: set(cols.split(",")) for cols, table in
+              re.findall(r"grant select \(([^)]+)\) on public\.(\w+) to anon;", contract.replace("\n  ", ""))}
     assert "month_start" not in grants["daily_member_stats"]
     assert grants["synergy_daily_dates"] == {"stat_date"}
     assert grants["elo_rankings"] == {"elo_id", "raw_rating", "rating", "tier", "tier_rank", "as_of"}
     assert "elo_id" not in grants["daily_member_stats"]
+    # 최신 날짜 뷰는 원본 표와 같은 열만, 부르는 쪽 권한(휴면 제외 정책)으로 읽는다
+    assert grants["daily_member_stats_latest"] == grants["daily_member_stats"]
+    assert "public.daily_member_stats_latest" in contract.split("from anon;", 1)[0]
+    assert re.search(r"create or replace view public\.daily_member_stats_latest\s+with \(security_invoker = true\)", head)
     # 대학 로고는 어느 화면에든 나오는 대학만
     assert "create policy university_logos_anon_read on public.university_logos for select to anon using (public.university_logo_shown(name));" in contract
     assert "scanned_at" not in grants["live_broadcasts_current"]

@@ -689,6 +689,19 @@ order by stat_date desc;
 
 grant select on public.synergy_daily_dates to authenticated;
 
+-- 가장 최근 날짜의 방송통계. 첫 화면(시너지, StarUniv 방송통계·프로필 팝업)이 날짜 목록을 받은 뒤 그 날짜로
+-- 다시 조회하던 왕복 한 번을 없앤다. security_invoker라 부르는 쪽의 정책(anon은 휴면 제외)과 열 권한이
+-- 그대로 적용되고, 최신 날짜도 그 사람이 볼 수 있는 행 중에서 고른다(synergy_daily_dates의 첫 날짜와 같다).
+create or replace view public.daily_member_stats_latest
+with (security_invoker = true)
+as
+select stat_date, soop_id, nickname, role, affiliation, race, tier, gender, birth_date, balloons, broadcast_seconds,
+       cumulative_viewers, sponsor_wins, sponsor_losses, updated_at, sponsor_updated_at
+from public.daily_member_stats
+where stat_date = (select max(stat_date) from public.daily_member_stats);
+
+grant select on public.daily_member_stats_latest to authenticated;
+
 
 -- ############################################################################
 -- 10. 티어랭킹 v4(모든 선수 레이팅·종족 상성)
@@ -1007,8 +1020,8 @@ revoke all on public.elo_derived_snapshots, public.elo_player_stats, public.elo_
   public.elo_rankings, public.elo_ranking_meta, public.elo_rating_history, public.elo_player_ratings,
   public.elo_player_matches, public.elo_public_players, public.elo_public_matches,
   public.elo_players, public.elo_matches, public.elo_maps, public.elo_categories,
-  public.daily_member_stats, public.synergy_daily_dates, public.poonggo_monthly_stats, public.synergy_month_confirmations,
-  public.live_broadcasts, public.live_broadcasts_current, public.live_scan_state, public.member_posts,
+  public.daily_member_stats, public.synergy_daily_dates, public.daily_member_stats_latest,
+  public.poonggo_monthly_stats, public.synergy_month_confirmations, public.live_broadcasts, public.live_broadcasts_current, public.live_scan_state, public.member_posts,
   public.rounds_effective, public.sync_jobs from anon;
 
 -- 티어표 상대전적·분석·엔트리(page-h2h.js, page-analysis.js, page-entry.js)
@@ -1022,6 +1035,8 @@ grant select (elo_id,rating,rating_se) on public.elo_player_ratings to anon;
 grant select (stat_date,soop_id,nickname,role,affiliation,race,tier,gender,birth_date,balloons,broadcast_seconds,
   cumulative_viewers,sponsor_wins,sponsor_losses,updated_at,sponsor_updated_at) on public.daily_member_stats to anon;
 grant select (stat_date) on public.synergy_daily_dates to anon;
+grant select (stat_date,soop_id,nickname,role,affiliation,race,tier,gender,birth_date,balloons,broadcast_seconds,
+  cumulative_viewers,sponsor_wins,sponsor_losses,updated_at,sponsor_updated_at) on public.daily_member_stats_latest to anon;
 -- 방송 중 표시: live_broadcasts_current는 security_invoker라 표의 열(거르는 scanned_at 포함)도 필요하다
 grant select (soop_id,broad_no,broad_title,current_sum_viewer,broad_start,category_name,broad_cate_no,scanned_at) on public.live_broadcasts to anon;
 grant select (soop_id,broad_no,broad_title,current_sum_viewer,broad_start,category_name,broad_cate_no) on public.live_broadcasts_current to anon;
