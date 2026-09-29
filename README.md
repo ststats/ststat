@@ -39,6 +39,9 @@ python scripts/run_job.py audit_match_rounds
 
 방송 중 표시는 이 파이프라인과 따로 돕니다: Supabase pg_cron이 2분마다 Edge Function `live-status`(`supabase/functions/live-status`)를 불러
 SOOP 전체 방송 목록을 훑고 `live_broadcasts`를 통째로 바꿉니다(`supabase/ststat.sql` 12번). 함수 코드를 고치면 Supabase 대시보드에 다시 배포합니다.
+목록은 SOOP 공식 Open API(`openapi.sooplive.com/broad/list`)로 받고, 안 되면 예전 비공식 목록으로 한 번 더 시도합니다.
+공식 API에는 함수 비밀값 `SOOP_CLIENT_ID`(SOOP Developers에서 Public 범위로 만든 앱의 client_id)가 필요하며, 없으면 비공식 목록만 씁니다.
+`/functions/v1/live-status?dry=1`의 `info.source`로 어느 목록을 썼는지 볼 수 있습니다.
 
 ## DB 적용
 
