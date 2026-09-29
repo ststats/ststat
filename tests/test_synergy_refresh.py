@@ -119,3 +119,33 @@ def test_daily_run_refreshes_from_rescan_window_or_earliest_backfill_marker(monk
     # 재수집 범위(9/1)보다 이른 소급 수정일(7/15)부터 어제까지 다시 센다
     assert calls["refresh"] == ("2026-07-15", "2026-09-24")
     assert result.metadata["modified_at_cleared"] == 1
+
+
+def test_closed_month_confirm_rejects_poonggo_drop(monkeypatch):
+    """월말 확정도 이번 달과 같은 급감 방어를 거친다(빈 응답이 0으로 채워져 확정되는 것 방지)."""
+    import pytest
+    from jobs import sync_synergy_daily as job
+    from models.synergy_stats import MonthlyLiveStats, SynergyRosterMember
+
+    roster = [SynergyRosterMember(soop_id=f"s{i}", elo_id=i, nickname=f"n{i}", role="", affiliation=None,
+                                  race=None, tier=None, modified_at=None) for i in range(10)]
+    saved = {}
+    monkeypatch.setattr(job, "first_snapshot_date", lambda: "2026-07-01")
+    monkeypatch.setattr(job, "existing_snapshot_count", lambda d: 5)
+    monkeypatch.setattr(job, "load_snapshot_roster", lambda d: roster)
+    monkeypatch.setattr(job, "get_month_confirmation", lambda m: {})
+    monkeypatch.setattr(job, "load_poonggo_month", lambda m: {f"s{i}": MonthlyLiveStats(balloons=1000) for i in range(10)})
+    monkeypatch.setattr(job, "upsert_poonggo_month", lambda m, d: saved.setdefault("poonggo", d))
+    monkeypatch.setattr(job, "aggregate_sponsor_stats", lambda a, b: {})
+    monkeypatch.setattr(job, "update_closed_month_numeric_stats", lambda *a: saved.setdefault("snapshot", a))
+    monkeypatch.setattr(job, "upsert_month_confirmation", lambda *a: saved.setdefault("confirm", a))
+
+    monkeypatch.setattr(job, "fetch_monthly", lambda y, m, ids: {i: MonthlyLiveStats() for i in ids})
+    with pytest.raises(RuntimeError, match="dropped"):
+        job._confirm_closed_months(date(2026, 9, 5))
+    assert saved == {}
+
+    # 정상(늘어난) 응답은 그대로 확정한다
+    monkeypatch.setattr(job, "fetch_monthly", lambda y, m, ids: {i: MonthlyLiveStats(balloons=1200) for i in ids})
+    result = job._confirm_closed_months(date(2026, 9, 5))
+    assert result["confirmed"] >= 1 and "confirm" in saved

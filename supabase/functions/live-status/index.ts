@@ -157,14 +157,22 @@ async function scanWith(source: Source, first: any, tried: string[]) {
     requested++;
     if (!data || !Array.isArray(data.broad)) { failed++; return; }
     for (const b of data.broad) {
-      const uid = b.user_id;
+      const uid = b && b.user_id;
       if (uid && !live.has(uid)) live.set(uid, b);
     }
   }
 
   processPage(first);
 
-  const totalCnt = parseInt(String(first.total_cnt || "0"), 10);
+  const totalCnt = parseInt(String(first.total_cnt ?? ""), 10);
+  // 첫 쪽 모양이 이상하면(건수가 없거나 숫자가 아님, 건수는 있는데 목록이 빔, 목록이 건수보다 많음)
+  // 빈/일부 결과로 기존 목록을 덮지 않고 실패로 기록한다 - 표는 그대로 두고 다음 수집에서 다시 한다.
+  if (!Number.isFinite(totalCnt) || totalCnt < 0 || totalCnt < first.broad.length ||
+      (totalCnt > 0 && first.broad.length === 0)) {
+    const err = new Error(`SOOP 방송 목록 첫 쪽이 이상합니다(total_cnt=${first.total_cnt}, broad=${first.broad.length}).`);
+    (err as any).info = { source: source.name, total_cnt: first.total_cnt ?? null };
+    throw err;
+  }
   const pageSize = parseInt(String(first.page_block || ""), 10) || PAGE_SIZE;
   const totalPages = Math.min(Math.ceil(totalCnt / pageSize), MAX_PAGES);
   let page = 2;
