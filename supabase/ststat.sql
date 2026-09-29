@@ -427,6 +427,11 @@ alter table public.synergy_month_confirmations enable row level security;
 -- No anon policy yet. During Part 5 these are pipeline validation tables.
 -- Service role used by ststat bypasses RLS. Synergy public read is enabled in the web cutover phase.
 
+-- 성별 표기 통일: 일별 통계의 성별은 선수 명단(tier_members)에서 복사되는데, 명단은 이제 저장할 때
+-- '남자'/'여자'로 맞춰진다(staruniv.sql 10번 normalize_gender - 그 파일을 먼저 실행). 예전 행만 한 번 맞춘다.
+update public.daily_member_stats set gender = public.normalize_gender(gender)
+ where gender is distinct from public.normalize_gender(gender);
+
 
 -- ############################################################################
 -- 6. 영상 수집
