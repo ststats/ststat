@@ -2,6 +2,8 @@
 //
 // SOOP 전체 방송 목록(시청자 많은 순)을 끝까지 훑어 tier_members에 있는 SOOP 아이디 중 방송 중인 사람만
 // public.live_broadcasts에 통째로 바꿔 넣는다.
+// 명단과 겹치는지는 DB 함수 live_roster_match가 가린다(명단 전체를 매번 내려받지 않게 - egress 절약).
+// 이 파일을 다시 배포하기 전에 ststat.sql의 live_roster_match를 먼저 실행해 둔다.
 // 목록은 SOOP 공식 Open API(openapi.sooplive.com/broad/list, client_id만 필요한 Public API)로 받고,
 // 공식 API가 첫 쪽부터 안 되면 예전 비공식 목록(live.sooplive.com)으로 한 번 더 해 본다. 한 번의 수집 안에서는
 // 한쪽만 쓴다(두 목록을 섞으면 쪽 경계가 달라 빠지거나 겹칠 수 있다).
@@ -48,23 +50,11 @@ async function rpc(name: string, args: Record<string, unknown> = {}) {
   return text ? JSON.parse(text) : null;
 }
 
-async function loadRosterIds(): Promise<Set<string>> {
-  const ids = new Set<string>();
-  for (let from = 0; from < 20000; from += 1000) {
-    const res = await fetch(
-      `${SUPABASE_URL}/rest/v1/tier_members?select=soop_id&soop_id=not.is.null` +
-        `&order=source_order.asc&offset=${from}&limit=1000`,
-      { headers: DB_HEADERS },
-    );
-    if (!res.ok) throw new Error("선수 목록 로드 실패: " + res.status);
-    const rows = await res.json();
-    for (const r of rows) {
-      const id = String(r.soop_id || "").trim();
-      if (id) ids.add(id);
-    }
-    if (rows.length < 1000) break;
-  }
-  return ids;
+// 방송 중 아이디 중 선수 명단에 있는 것만 DB가 골라 준다(ststat.sql live_roster_match).
+// 명단 전체를 내려받지 않아서 2분마다 도는 수집의 egress가 방송 중인 선수 수만큼으로 준다.
+async function matchRoster(ids: string[]): Promise<{ roster: number; ids: Set<string> }> {
+  const r = await rpc("live_roster_match", { p_ids: ids });
+  return { roster: Number(r?.roster) || 0, ids: new Set<string>(r?.ids || []) };
 }
 
 async function getJson(url: string) {
@@ -145,21 +135,21 @@ async function officialSource(): Promise<Source> {
 }
 
 // 공식 목록을 먼저, 안 되면 예전 목록으로. 첫 쪽이 방송 목록 모양이 아니면(오류 응답 등) 실패로 본다.
-async function scanAllSOOP(wantedIds: Set<string>) {
+async function scanAllSOOP() {
   const tried: string[] = [];
   const sources = SOOP_CLIENT_ID ? [officialSource, async () => legacySource()] : [async () => legacySource()];
   for (const make of sources) {
     const source = await make();
     const first = await source.fetchPage(1);
-    if (first && Array.isArray(first.broad)) return scanWith(source, first, wantedIds, tried);
+    if (first && Array.isArray(first.broad)) return scanWith(source, first, tried);
     tried.push(source.name);
   }
   // 첫 쪽부터 못 받으면 SOOP 쪽 문제 - 빈 결과로 덮어쓰지 않는다
   throw new Error(`SOOP 방송 목록 첫 쪽을 받지 못했습니다(${tried.join(", ")}).`);
 }
 
-async function scanWith(source: Source, first: any, wantedIds: Set<string>, tried: string[]) {
-  const found = new Map<string, any>();   // 아이디 → 목록의 방송 항목(저장할 모양은 끝에서 만든다)
+async function scanWith(source: Source, first: any, tried: string[]) {
+  const live = new Map<string, any>();    // 아이디 → 목록의 방송 항목(모든 방송. 명단과 겹치는 것만 끝에서 남긴다)
   let requested = 0;
   let failed = 0;
 
@@ -168,7 +158,7 @@ async function scanWith(source: Source, first: any, wantedIds: Set<string>, trie
     if (!data || !Array.isArray(data.broad)) { failed++; return; }
     for (const b of data.broad) {
       const uid = b.user_id;
-      if (uid && wantedIds.has(uid) && !found.has(uid)) found.set(uid, b);
+      if (uid && !live.has(uid)) live.set(uid, b);
     }
   }
 
@@ -178,14 +168,14 @@ async function scanWith(source: Source, first: any, wantedIds: Set<string>, trie
   const pageSize = parseInt(String(first.page_block || ""), 10) || PAGE_SIZE;
   const totalPages = Math.min(Math.ceil(totalCnt / pageSize), MAX_PAGES);
   let page = 2;
-  while (page <= totalPages && found.size < wantedIds.size) {
+  while (page <= totalPages) {
     const batch: number[] = [];
     for (let i = 0; i < CONCURRENCY && page <= totalPages; i++, page++) batch.push(page);
     (await Promise.all(batch.map(source.fetchPage))).forEach(processPage);
   }
 
   const info: Record<string, unknown> = {
-    source: source.name, total_cnt: totalCnt, total_pages: totalPages, requested, failed, found: found.size,
+    source: source.name, total_cnt: totalCnt, total_pages: totalPages, requested, failed,
   };
   if (tried.length) info.fallback_from = tried;
   // 못 받은 쪽이 많으면 방송 중인 사람이 빠진 결과일 수 있다 - 저장하지 않는다
@@ -194,8 +184,12 @@ async function scanWith(source: Source, first: any, wantedIds: Set<string>, trie
     (err as any).info = info;
     throw err;
   }
+  const match = await matchRoster([...live.keys()]);
+  if (match.roster === 0) throw new Error("선수 목록이 비어 있습니다.");
+  info.roster = match.roster;
+  info.found = match.ids.size;
   await source.ready;
-  const rows = [...found.entries()].map(([uid, b]) => {
+  const rows = [...live.entries()].filter(([uid]) => match.ids.has(uid)).map(([uid, b]) => {
     const viewers = parseInt(String(source.viewers(b) ?? ""), 10);
     return {
       soop_id: uid,
@@ -328,10 +322,8 @@ Deno.serve(async (req) => {
   let body: Record<string, unknown>;
   let status = 200;
   try {
-    const roster = await loadRosterIds();
-    if (roster.size === 0) throw new Error("선수 목록이 비어 있습니다.");
-    const scan = await scanAllSOOP(roster);
-    info = { ...scan.info, roster: roster.size, ms: Date.now() - t0 };
+    const scan = await scanAllSOOP();
+    info = { ...scan.info, ms: Date.now() - t0 };
     const saved = await rpc("replace_live_broadcasts", { p_rows: scan.rows, p_info: info });
     body = { success: true, live_count: saved, ...info };
   } catch (e) {

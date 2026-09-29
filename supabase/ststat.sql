@@ -888,6 +888,24 @@ begin
 end;
 $$;
 
+-- 방송 중 목록의 아이디 중 선수 명단(tier_members)에 있는 것만 돌려준다. 예전에는 수집할 때마다
+-- 명단 전체(1,200여 명)를 함수로 내려받았는데(2분마다 = 하루 720번, egress), 아이디를 보내고
+-- 겹치는 것만 받으면 받는 양이 방송 중인 선수 수만큼으로 준다(보내는 쪽은 과금 없음).
+create or replace function public.live_roster_match(p_ids text[])
+returns jsonb
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select jsonb_build_object(
+    'roster', (select count(distinct btrim(t.soop_id)) from public.tier_members t
+                where btrim(coalesce(t.soop_id, '')) <> ''),
+    'ids', coalesce((select jsonb_agg(distinct btrim(t.soop_id)) from public.tier_members t
+                      where btrim(t.soop_id) = any(p_ids)), '[]'::jsonb)
+  );
+$$;
+
 -- 수집 결과로 표를 통째로 바꾼다(한 트랜잭션이라 읽는 쪽이 빈 표를 보는 순간이 없다).
 create or replace function public.replace_live_broadcasts(p_rows jsonb, p_info jsonb)
 returns integer
@@ -928,9 +946,11 @@ as $$
 $$;
 
 revoke all on function public.try_begin_live_scan() from public, anon, authenticated;
+revoke all on function public.live_roster_match(text[]) from public, anon, authenticated;
 revoke all on function public.replace_live_broadcasts(jsonb, jsonb) from public, anon, authenticated;
 revoke all on function public.fail_live_scan(text, jsonb) from public, anon, authenticated;
 grant execute on function public.try_begin_live_scan() to service_role;
+grant execute on function public.live_roster_match(text[]) to service_role;
 grant execute on function public.replace_live_broadcasts(jsonb, jsonb) to service_role;
 grant execute on function public.fail_live_scan(text, jsonb) to service_role;
 
