@@ -149,3 +149,40 @@ def test_closed_month_confirm_rejects_poonggo_drop(monkeypatch):
     monkeypatch.setattr(job, "fetch_monthly", lambda y, m, ids: {i: MonthlyLiveStats(balloons=1200) for i in ids})
     result = job._confirm_closed_months(date(2026, 9, 5))
     assert result["confirmed"] >= 1 and "confirm" in saved
+
+
+def test_eloboard_failure_still_publishes_but_defers_month_confirmation(monkeypatch):
+    """EloBoard 수집이 실패한 실행: 일별 게시는 하고 지난달 확정만 미룬다."""
+    import datetime as dt
+    from jobs import sync_synergy_daily as job
+    from models.synergy_stats import MonthlyLiveStats, SynergyRosterMember
+
+    roster = [SynergyRosterMember(soop_id=f"s{i}", elo_id=i, nickname=f"n{i}", role="", affiliation=None,
+                                  race=None, tier=None, modified_at=None) for i in range(120)]
+    calls = {}
+    monkeypatch.setattr(job, "load_roster_for_synergy", lambda: roster)
+    monkeypatch.setattr(job, "fetch_monthly", lambda y, m, ids: {i: MonthlyLiveStats() for i in ids})
+    monkeypatch.setattr(job, "aggregate_sponsor_stats", lambda a, b: {})
+    monkeypatch.setattr(job, "load_poonggo_month", lambda m: {})
+    monkeypatch.setattr(job, "upsert_poonggo_month", lambda m, d: len(d))
+    monkeypatch.setattr(job, "upsert_daily_snapshot", lambda d, rows: calls.setdefault("daily", len(rows)))
+    monkeypatch.setattr(job, "apply_roster_backfill", lambda m, d: 0)
+    monkeypatch.setattr(job, "refresh_sponsor_stats", lambda a, b: {"days_checked": 0, "days_changed": [], "rows_changed": 0})
+    monkeypatch.setattr(job, "clear_modified_at", lambda m: 0)
+    monkeypatch.setattr(job, "_confirm_closed_months", lambda today: calls.setdefault("confirm", True) and
+                        {"checked": 1, "confirmed": 1, "poonggo_rows": 0, "missing_month_end": []})
+
+    class Fixed(dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 10, 2, 12, 0, tzinfo=tz)
+    monkeypatch.setattr(job, "datetime", Fixed)
+
+    monkeypatch.setenv("ELOBOARD_OK", "false")
+    result = job.run()
+    assert calls.get("daily") == 120 and "confirm" not in calls
+    assert result.metadata["eloboard_ok"] is False
+
+    monkeypatch.setenv("ELOBOARD_OK", "true")
+    job.run()
+    assert calls.get("confirm") is True

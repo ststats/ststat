@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import calendar
+import os
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -210,7 +211,14 @@ def run() -> JobResult:
     # Clear markers only after all affected member backfills have succeeded.
     cleared = clear_modified_at(corrected_members) if corrected_members else 0
 
-    confirmations = _confirm_closed_months(today)
+    # EloBoard 수집이 이번 실행에서 실패했어도(파이프라인이 ELOBOARD_OK=false로 알려 줌) 별풍선·방송시간·시청자는
+    # 위에서 갱신하고, 스폰 승패는 DB에 있는 경기로 센다(다음 실행의 재집계 범위가 따라잡는다). 다만 지난달 확정은
+    # 한 번 하면 다시 보지 않으므로 경기 수집이 성공한 실행으로 미룬다.
+    eloboard_ok = os.getenv("ELOBOARD_OK", "true").lower() != "false"
+    if eloboard_ok:
+        confirmations = _confirm_closed_months(today)
+    else:
+        confirmations = {"checked": 0, "confirmed": 0, "poonggo_rows": 0, "missing_month_end": []}
 
     return JobResult(
         records_read=len(roster) + len(poonggo),
@@ -234,5 +242,6 @@ def run() -> JobResult:
             "sponsor_refresh_from": refresh_from,
             "sponsor_refresh": sponsor_refresh,
             "atomic_daily_publish": True,
+            "eloboard_ok": eloboard_ok,
         },
     )
