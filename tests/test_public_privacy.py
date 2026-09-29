@@ -44,6 +44,16 @@ def test_live_status_collects_member_posts_every_run():
     assert 'rpc("replace_member_posts"' in ts
 
 
+def test_live_status_matches_roster_in_db_not_by_download():
+    """수집 함수는 명단 전체를 내려받지 않고 DB 함수로 겹치는 아이디만 받는다(egress 절약)."""
+    from pathlib import Path
+    ts = Path("supabase/functions/live-status/index.ts").read_text(encoding="utf-8")
+    assert 'rpc("live_roster_match"' in ts
+    assert "/rest/v1/tier_members" not in ts
+    assert "revoke all on function public.live_roster_match(text[]) from public, anon, authenticated;" in SQL
+    assert "grant execute on function public.live_roster_match(text[]) to service_role;" in SQL
+
+
 def test_anon_gets_only_the_columns_pages_read():
     """익명 조회는 14번 한 곳에서 열 단위로만 준다(화면에 나오는 것만)."""
     head, contract = SQL.split("-- 14. 익명(anon) 공개 범위", 1)
