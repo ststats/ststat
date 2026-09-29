@@ -88,6 +88,7 @@ type Source = {
   viewers: (b: any) => unknown;
   categoryName: (b: any) => string | null;
   ready?: Promise<unknown>;   // categoryName을 쓰기 전에 기다릴 것(카테고리 목록)
+  categoryCount?: () => number;   // 받은 카테고리 이름 수(dry=1 확인용)
 };
 
 function legacySource(): Source {
@@ -103,19 +104,25 @@ function legacySource(): Source {
   };
 }
 
+// 카테고리 번호를 비교할 모양으로: "00040001"과 40001(숫자)처럼 앞의 0 유무가 달라도 같은 번호로 본다.
+const cateKey = (no: unknown) => String(no ?? "").trim().replace(/^0+(?=\d)/, "");
+
 // 공식 카테고리 번호 → 이름("00040001" → "스타크래프트"). 하위 카테고리까지 펼친다. 못 받으면 빈 표(번호만 저장).
+// 응답이 문서 예시({broad_category:[...]})와 조금 달라도(data로 한 번 감싸거나 배열만 오거나) 읽는다.
 async function officialCategoryNames(): Promise<Map<string, string>> {
   const names = new Map<string, string>();
   const data = await getJson(
     `https://openapi.sooplive.com/broad/category/list?client_id=${encodeURIComponent(SOOP_CLIENT_ID)}&locale=ko_KR`,
   );
-  const walk = (list: any[]) => {
-    for (const c of list || []) {
-      if (c?.cate_no && c?.cate_name) names.set(String(c.cate_no), String(c.cate_name));
-      walk(c?.child);
+  const walk = (list: any) => {
+    if (!Array.isArray(list)) return;
+    for (const c of list) {
+      const no = c?.cate_no ?? c?.category_no, name = c?.cate_name ?? c?.category_name;
+      if (no != null && name) names.set(cateKey(no), String(name));
+      walk(c?.child ?? c?.children);
     }
   };
-  walk(data?.broad_category);
+  walk(data?.broad_category ?? data?.data?.broad_category ?? data?.data ?? data);
   return names;
 }
 
@@ -126,13 +133,14 @@ async function officialSource(): Promise<Source> {
   return {
     name: "official",
     ready,
+    categoryCount: () => names.size,
     // select_value를 비우면 전체 카테고리, 시청자 많은 순
     fetchPage: page => getJson(
       `https://openapi.sooplive.com/broad/list?client_id=${encodeURIComponent(SOOP_CLIENT_ID)}` +
         `&select_key=cate&select_value=&order_type=view_cnt&page_no=${page}`,
     ),
     viewers: b => b.total_view_cnt,
-    categoryName: b => names.get(String(b.broad_cate_no ?? "")) ?? null,
+    categoryName: b => names.get(cateKey(b.broad_cate_no)) ?? null,
   };
 }
 
@@ -196,9 +204,15 @@ async function scanWith(source: Source, first: any, wantedIds: Set<string>, trie
       current_sum_viewer: Number.isFinite(viewers) ? viewers : null,
       broad_start: b.broad_start ?? null,
       category_name: source.categoryName(b),                                 // "스타크래프트"
-      broad_cate_no: b.broad_cate_no != null ? String(b.broad_cate_no) : null, // "00040001" (이름이 빌 때 대비)
+      // "00040001" (이름이 빌 때 사이트가 번호로 스타 여부를 판단). 숫자(40001)로 와도 8자리로 맞춘다
+      broad_cate_no: b.broad_cate_no != null ? String(b.broad_cate_no).trim().replace(/^\d{1,7}$/, n => n.padStart(8, "0")) : null,
     };
   });
+  // 카테고리 이름이 잘 붙는지 dry=1로 볼 수 있게: 받은 카테고리 수, 이름을 못 붙인 방송 수·번호 예시
+  const unnamed = rows.filter(r => !r.category_name);
+  if (source.categoryCount) info.categories = source.categoryCount();
+  info.unnamed = unnamed.length;
+  if (unnamed.length) info.unnamed_cate_nos = [...new Set(unnamed.map(r => r.broad_cate_no))].slice(0, 5);
   return { rows, info };
 }
 
