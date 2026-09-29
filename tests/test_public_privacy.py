@@ -89,3 +89,12 @@ def test_list_functions_read_as_the_caller_and_only_granted_views():
         header = sql[body.start():body.start(1)]
         assert 'security invoker' in header and 'security definer' not in header, name
         assert re.search(rf"grant execute on function .*public\.{name}\(", sql, re.S), name
+
+
+def test_live_status_rejects_malformed_first_page():
+    """첫 쪽 건수가 이상하거나 건수는 있는데 목록이 비면 빈 결과로 덮지 않고 실패로 기록한다."""
+    from pathlib import Path
+    ts = Path("supabase/functions/live-status/index.ts").read_text(encoding="utf-8")
+    assert "!Number.isFinite(totalCnt)" in ts
+    assert "totalCnt > 0 && first.broad.length === 0" in ts
+    assert "const uid = b && b.user_id;" in ts

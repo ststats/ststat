@@ -84,6 +84,17 @@ def _require_poonggo_coverage(roster, poonggo, label: str) -> None:
         )
 
 
+def _fetch_closed_month(month: date, roster) -> dict:
+    # 월말 확정도 이번 달 게시와 같은 방어를 거친다: 정상 HTTP인데 빈 응답이면 수집기가 요청 계정을 0으로
+    # 채워 돌려주고 coverage는 통과한다. 그 값을 확정하면 complete 플래그 때문에 다시 보지 않으므로
+    # 저장된 그달 누적과 비교해 여러 계정이 절반 넘게 줄었으면 확정하지 않고 다음 실행에서 다시 받는다.
+    month_start_str = month.isoformat()
+    poonggo = fetch_monthly(month.year, month.month, [m.soop_id for m in roster])
+    _require_poonggo_coverage(roster, poonggo, month_start_str)
+    _check_poonggo_drop(load_poonggo_month(month_start_str), poonggo, month_start_str)
+    return poonggo
+
+
 def _confirm_closed_months(today: date) -> dict:
     # We only need to confirm months that already have a last-day snapshot in Supabase.
     # Start with previous month and walk back at most MAX_CONFIRM_MONTHS_PER_RUN; missing snapshots are skipped.
@@ -124,8 +135,7 @@ def _confirm_closed_months(today: date) -> dict:
         poonggo = None
         sponsor = None
         if not poonggo_ok:
-            poonggo = fetch_monthly(month.year, month.month, [m.soop_id for m in roster])
-            _require_poonggo_coverage(roster, poonggo, month_start_str)
+            poonggo = _fetch_closed_month(month, roster)
             upsert_poonggo_month(month_start_str, poonggo)
             poonggo_rows += len(poonggo)
             poonggo_ok = True
@@ -137,8 +147,7 @@ def _confirm_closed_months(today: date) -> dict:
 
         if poonggo is None:
             # Fetch again to reconstruct the confirmed last-day snapshot. This is deliberate and rare (once/month).
-            poonggo = fetch_monthly(month.year, month.month, [m.soop_id for m in roster])
-            _require_poonggo_coverage(roster, poonggo, month_start_str)
+            poonggo = _fetch_closed_month(month, roster)
         if sponsor is None:
             sponsor = aggregate_sponsor_stats(month_start_str, last_day_str)
 
