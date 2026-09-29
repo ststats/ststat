@@ -197,6 +197,22 @@ def load_active_snapshot() -> dict | None:
     return rows[0] if rows else None
 
 
+def snapshot_has_data(snapshot_id: str) -> bool:
+    """활성 스냅샷에 통계가 실제로 들어 있는지(순위 메타 1행과 순위 1행만 본다).
+    백업에서 스냅샷 목록만 복구되고 통계 표가 비어 있으면 입력 지문이 같아도 다시 계산해야 한다."""
+    try:
+        for table in ('elo_ranking_meta', 'elo_rankings'):
+            rows = get_supabase().table(table).select('snapshot_id').eq(
+                'snapshot_id', snapshot_id).limit(1).execute().data or []
+            if not rows:
+                print(f'active snapshot {snapshot_id} has no {table} rows, recalculating')
+                return False
+    except Exception as exc:
+        print(f'snapshot data check failed, recalculating: {exc}')
+        return False
+    return True
+
+
 def create_snapshot(as_of: str, source_match_count: int, metadata: dict) -> str:
     sid = str(uuid.uuid4())
     get_supabase().table('elo_derived_snapshots').insert({
