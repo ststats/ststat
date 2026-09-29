@@ -15,6 +15,7 @@ from repositories.derived_stats import (
     load_source_data,
     load_source_signature,
     mark_failed,
+    snapshot_has_data,
     write_snapshot,
 )
 
@@ -49,11 +50,13 @@ def run() -> JobResult:
         print(f"pre-run snapshot cleanup skipped: {exc}")
 
     # 경기·선수·티어표와 계산 코드가 지난 활성 스냅샷 때와 같으면 결과도 같다 - 수십만 행을 읽지 않고 끝낸다.
+    # 단 활성 스냅샷의 통계가 실제로 있을 때만(백업 복구 뒤처럼 목록만 남고 통계 표가 비었으면 다시 계산).
     db_signature = load_source_signature()
     source_signature = f'{db_signature}#{_code_fingerprint()}' if db_signature else None
     if source_signature:
         active = load_active_snapshot()
-        if active and (active.get('metadata') or {}).get('source_signature') == source_signature:
+        if (active and (active.get('metadata') or {}).get('source_signature') == source_signature
+                and snapshot_has_data(active['snapshot_id'])):
             lap('signature_seconds')
             return JobResult(
                 records_skipped=1,
