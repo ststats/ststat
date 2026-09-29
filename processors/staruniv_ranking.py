@@ -717,8 +717,8 @@ def build_history(rows, cats, players, t_pos, n_tiers, last_day, ladders,
     입력 지문이 같은 마감 월은 이전 활성 스냅샷을 재사용하고, 현재 월은 이미
     계산한 현재 랭킹을 공유한다. 캐시가 무효면 마감 월만 전체 재계산한다.
     """
-    dated = sorted(rows, key=lambda r: str(r[1])[:10])
-    days = [str(r[1])[:10] for r in dated]
+    # 날짜순 정렬은 실제로 다시 계산하는 달이 생길 때 한 번만 한다(모든 달을 캐시로 채우면 필요 없다)
+    dated = days = None
     months = month_ends(last_day, HISTORY_MONTHS)
     series = {}
     keys = []
@@ -746,6 +746,9 @@ def build_history(rows, cats, players, t_pos, n_tiers, last_day, ladders,
                     series.setdefault(pid, {})[key] = value
             reused += 1
             continue
+        if dated is None:
+            dated = sorted(rows, key=lambda r: str(r[1])[:10])
+            days = [str(r[1])[:10] for r in dated]
         cut = bisect.bisect_right(days, end.isoformat())
         if cut < 100:
             continue

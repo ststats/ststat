@@ -137,3 +137,41 @@ def test_closed_history_reuses_cache_and_only_solves_current_month(monkeypatch):
     assert keys == months
     assert calls == []
     assert players["1"][-1] == 123.0
+
+
+def test_history_skips_sorting_when_every_month_is_reused(monkeypatch):
+    """마감 월은 모두 캐시, 현재 월은 현재 점수로 채우면 전체 경기를 정렬하지 않는다."""
+    last_day = dt.date(2026, 9, 22)
+    months = [d.strftime("%Y-%m") for d in staruniv_ranking.month_ends(last_day, 18)]
+    cached = {"months": months, "players": {"1": list(range(18))}}
+
+    class NoIter(list):
+        def __iter__(self):
+            raise AssertionError("rows should not be read")
+
+    monkeypatch.setattr(staruniv_ranking, "solve_at", lambda *a, **k: {})
+    keys, players = staruniv_ranking.build_history(
+        NoIter([[0, "2026-09-22", 1, 2, 0, 0]]), ["sponsored"], {}, {}, 0, last_day, {}, cached, {"1": 5.0}
+    )
+    assert keys == months
+    assert players["1"][:-1] == list(range(17)) and players["1"][-1] == 5.0
+
+
+def test_history_recomputes_uncached_month_from_rows_up_to_its_end(monkeypatch):
+    last_day = dt.date(2026, 9, 22)
+    months = [d.strftime("%Y-%m") for d in staruniv_ranking.month_ends(last_day, 18)]
+    cached = {"months": months[:-2], "players": {"1": list(range(16))}}   # 8월이 캐시에 없다
+    seen = []
+
+    def fake_solve(dated, cats, end, *args):
+        seen.append((end.isoformat(), len(dated), max(r[1] for r in dated)))
+        return {"1": 7.0}
+
+    monkeypatch.setattr(staruniv_ranking, "solve_at", fake_solve)
+    rows = ([[i, "2026-09-10", 1, 2, 0, 0] for i in range(50)]
+            + [[i, "2026-08-05", 1, 2, 0, 0] for i in range(120)])
+    keys, players = staruniv_ranking.build_history(
+        rows, ["sponsored"], {}, {}, 0, last_day, {}, cached, {"1": 9.0}
+    )
+    assert seen == [("2026-08-31", 120, "2026-08-05")]
+    assert players["1"][-2:] == [7.0, 9.0]
