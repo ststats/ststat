@@ -2,6 +2,11 @@
 //
 // SOOP 전체 방송 목록(시청자 많은 순)을 끝까지 훑어 tier_members에 있는 SOOP 아이디 중 방송 중인 사람만
 // public.live_broadcasts에 통째로 바꿔 넣는다.
+// 목록은 SOOP 공식 Open API(openapi.sooplive.com/broad/list, client_id만 필요한 Public API)로 받고,
+// 공식 API가 첫 쪽부터 안 되면 예전 비공식 목록(live.sooplive.com)으로 한 번 더 해 본다. 한 번의 수집 안에서는
+// 한쪽만 쓴다(두 목록을 섞으면 쪽 경계가 달라 빠지거나 겹칠 수 있다).
+// 필요한 비밀값: SOOP_CLIENT_ID(SOOP Developers > My Account에서 만든 앱의 client_id, 대시보드 Edge Functions → Secrets).
+//   없으면 예전 비공식 목록만 쓴다.
 // pg_cron이 2분마다 부른다(supabase/ststat.sql 12번 맨 아래).
 //
 // 배포: Supabase 대시보드 → Edge Functions → 새 함수 "live-status"에 이 파일을 붙여 넣고,
@@ -22,6 +27,7 @@ const FETCH_TIMEOUT_MS = 8000;   // SOOP 한 쪽 요청 최대 대기
 // 방송이 한 번(2분) 빠질 수 있지만, 끝난 방송이 남는 것보다 낫다(운영 결정 2026-09-26).
 const MAX_FAILED_RATIO = 0.2;
 
+const SOOP_CLIENT_ID = (Deno.env.get("SOOP_CLIENT_ID") || "").trim();
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const DB_HEADERS = {
@@ -61,14 +67,10 @@ async function loadRosterIds(): Promise<Set<string>> {
   return ids;
 }
 
-async function fetchPage(page: number) {
-  const apiUrl =
-    `https://live.sooplive.com/api/main_broad_list_api.php` +
-    `?selectType=action&selectValue=all&orderType=view_cnt` +
-    `&pageNo=${page}&strmLangType=&lang=ko_KR`;
+async function getJson(url: string) {
   try {
-    const res = await fetch(apiUrl, {
-      headers: { "User-Agent": "Mozilla/5.0" },
+    const res = await fetch(url, {
+      headers: { "User-Agent": "Mozilla/5.0", "Accept": "application/json" },
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
     if (!res.ok) return null;
@@ -78,53 +80,126 @@ async function fetchPage(page: number) {
   }
 }
 
+// 방송 목록 한 쪽을 받는 방법. 두 목록 모두 한 쪽 60개, 같은 방송 필드(user_id·broad_no·broad_cate_no 등)를 준다.
+// 공식 목록은 시청자 수가 total_view_cnt이고 카테고리 이름이 없어(번호만) 카테고리 목록 API로 이름을 채운다.
+type Source = {
+  name: string;
+  fetchPage: (page: number) => Promise<any>;
+  viewers: (b: any) => unknown;
+  categoryName: (b: any) => string | null;
+  ready?: Promise<unknown>;   // categoryName을 쓰기 전에 기다릴 것(카테고리 목록)
+};
+
+function legacySource(): Source {
+  return {
+    name: "legacy",
+    fetchPage: page => getJson(
+      `https://live.sooplive.com/api/main_broad_list_api.php` +
+        `?selectType=action&selectValue=all&orderType=view_cnt` +
+        `&pageNo=${page}&strmLangType=&lang=ko_KR`,
+    ),
+    viewers: b => b.current_view_cnt,
+    categoryName: b => b.category_name ?? null,
+  };
+}
+
+// 공식 카테고리 번호 → 이름("00040001" → "스타크래프트"). 하위 카테고리까지 펼친다. 못 받으면 빈 표(번호만 저장).
+async function officialCategoryNames(): Promise<Map<string, string>> {
+  const names = new Map<string, string>();
+  const data = await getJson(
+    `https://openapi.sooplive.com/broad/category/list?client_id=${encodeURIComponent(SOOP_CLIENT_ID)}&locale=ko_KR`,
+  );
+  const walk = (list: any[]) => {
+    for (const c of list || []) {
+      if (c?.cate_no && c?.cate_name) names.set(String(c.cate_no), String(c.cate_name));
+      walk(c?.child);
+    }
+  };
+  walk(data?.broad_category);
+  return names;
+}
+
+async function officialSource(): Promise<Source> {
+  // 카테고리 이름은 방송 목록과 동시에 받는다(저장 직전에만 필요)
+  let names = new Map<string, string>();
+  const ready = officialCategoryNames().then(m => { names = m; });
+  return {
+    name: "official",
+    ready,
+    // select_value를 비우면 전체 카테고리, 시청자 많은 순
+    fetchPage: page => getJson(
+      `https://openapi.sooplive.com/broad/list?client_id=${encodeURIComponent(SOOP_CLIENT_ID)}` +
+        `&select_key=cate&select_value=&order_type=view_cnt&page_no=${page}`,
+    ),
+    viewers: b => b.total_view_cnt,
+    categoryName: b => names.get(String(b.broad_cate_no ?? "")) ?? null,
+  };
+}
+
+// 공식 목록을 먼저, 안 되면 예전 목록으로. 첫 쪽이 방송 목록 모양이 아니면(오류 응답 등) 실패로 본다.
 async function scanAllSOOP(wantedIds: Set<string>) {
-  const found = new Map<string, Record<string, unknown>>();
+  const tried: string[] = [];
+  const sources = SOOP_CLIENT_ID ? [officialSource, async () => legacySource()] : [async () => legacySource()];
+  for (const make of sources) {
+    const source = await make();
+    const first = await source.fetchPage(1);
+    if (first && Array.isArray(first.broad)) return scanWith(source, first, wantedIds, tried);
+    tried.push(source.name);
+  }
+  // 첫 쪽부터 못 받으면 SOOP 쪽 문제 - 빈 결과로 덮어쓰지 않는다
+  throw new Error(`SOOP 방송 목록 첫 쪽을 받지 못했습니다(${tried.join(", ")}).`);
+}
+
+async function scanWith(source: Source, first: any, wantedIds: Set<string>, tried: string[]) {
+  const found = new Map<string, any>();   // 아이디 → 목록의 방송 항목(저장할 모양은 끝에서 만든다)
   let requested = 0;
   let failed = 0;
 
   function processPage(data: any) {
     requested++;
-    if (!data) { failed++; return; }
-    for (const b of data.broad || []) {
+    if (!data || !Array.isArray(data.broad)) { failed++; return; }
+    for (const b of data.broad) {
       const uid = b.user_id;
-      if (uid && wantedIds.has(uid) && !found.has(uid)) {
-        const viewers = parseInt(b.current_view_cnt, 10);
-        found.set(uid, {
-          soop_id: uid,
-          broad_no: b.broad_no != null ? String(b.broad_no) : null,
-          broad_title: b.broad_title ?? null,
-          current_sum_viewer: Number.isFinite(viewers) ? viewers : null,
-          broad_start: b.broad_start ?? null,
-          category_name: b.category_name ?? null,   // "스타크래프트"
-          broad_cate_no: b.broad_cate_no ?? null,   // "00040001" (이름이 빌 때 대비)
-        });
-      }
+      if (uid && wantedIds.has(uid) && !found.has(uid)) found.set(uid, b);
     }
   }
 
-  const first = await fetchPage(1);
-  // 첫 쪽부터 못 받으면 SOOP 쪽 문제 - 빈 결과로 덮어쓰지 않는다
-  if (!first) throw new Error("SOOP 방송 목록 첫 쪽을 받지 못했습니다.");
   processPage(first);
 
-  const totalCnt = parseInt(first.total_cnt || "0", 10);
-  const totalPages = Math.min(Math.ceil(totalCnt / PAGE_SIZE), MAX_PAGES);
+  const totalCnt = parseInt(String(first.total_cnt || "0"), 10);
+  const pageSize = parseInt(String(first.page_block || ""), 10) || PAGE_SIZE;
+  const totalPages = Math.min(Math.ceil(totalCnt / pageSize), MAX_PAGES);
   let page = 2;
   while (page <= totalPages && found.size < wantedIds.size) {
     const batch: number[] = [];
     for (let i = 0; i < CONCURRENCY && page <= totalPages; i++, page++) batch.push(page);
-    (await Promise.all(batch.map(fetchPage))).forEach(processPage);
+    (await Promise.all(batch.map(source.fetchPage))).forEach(processPage);
   }
 
-  const info = { total_cnt: totalCnt, total_pages: totalPages, requested, failed, found: found.size };
+  const info: Record<string, unknown> = {
+    source: source.name, total_cnt: totalCnt, total_pages: totalPages, requested, failed, found: found.size,
+  };
+  if (tried.length) info.fallback_from = tried;
   // 못 받은 쪽이 많으면 방송 중인 사람이 빠진 결과일 수 있다 - 저장하지 않는다
   if (failed / requested > MAX_FAILED_RATIO) {
     const err = new Error(`SOOP 방송 목록 ${requested}쪽 중 ${failed}쪽을 받지 못했습니다.`);
     (err as any).info = info;
     throw err;
   }
-  return { rows: [...found.values()], info };
+  await source.ready;
+  const rows = [...found.entries()].map(([uid, b]) => {
+    const viewers = parseInt(String(source.viewers(b) ?? ""), 10);
+    return {
+      soop_id: uid,
+      broad_no: b.broad_no != null ? String(b.broad_no) : null,
+      broad_title: b.broad_title ?? null,
+      current_sum_viewer: Number.isFinite(viewers) ? viewers : null,
+      broad_start: b.broad_start ?? null,
+      category_name: source.categoryName(b),                                 // "스타크래프트"
+      broad_cate_no: b.broad_cate_no != null ? String(b.broad_cate_no) : null, // "00040001" (이름이 빌 때 대비)
+    };
+  });
+  return { rows, info };
 }
 
 // ---------------------------------------------------------------------------
