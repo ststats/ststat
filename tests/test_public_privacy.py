@@ -69,8 +69,11 @@ def test_anon_gets_only_the_columns_pages_read():
     assert "elo_id" not in grants["daily_member_stats"]
     # 최신 날짜 뷰는 원본 표와 같은 열만, 부르는 쪽 권한(휴면 제외 정책)으로 읽는다
     assert grants["daily_member_stats_latest"] == grants["daily_member_stats"]
+    # 목록(대학 카드)에는 생년월일·종족이 안 보인다: 🎂용 생일 달만. 프로필은 player_profile_stats로
+    assert {"birth_date", "race"}.isdisjoint(grants["daily_member_stats"])
+    assert "birth_month" in grants["daily_member_stats"]
     assert "public.daily_member_stats_latest" in contract.split("from anon;", 1)[0]
-    assert re.search(r"create or replace view public\.daily_member_stats_latest\s+with \(security_invoker = true\)", head)
+    assert re.search(r"create view public\.daily_member_stats_latest\s+with \(security_invoker = true\)", head)
     # 대학 로고는 어느 화면에든 나오는 대학만
     assert "create policy university_logos_anon_read on public.university_logos for select to anon using (public.university_logo_shown(name));" in contract
     assert "scanned_at" not in grants["live_broadcasts_current"]
@@ -98,3 +101,12 @@ def test_live_status_rejects_malformed_first_page():
     assert "!Number.isFinite(totalCnt)" in ts
     assert "totalCnt > 0 && first.broad.length === 0" in ts
     assert "const uid = b && b.user_id;" in ts
+
+
+def test_player_specific_reads_go_through_functions():
+    """선수를 지정한 조회(프로필 등)는 휴면이어도 주되, 화면에 나오는 열만 돌려주는 함수로만."""
+    for fn in ("player_stats(text, date)", "player_profile_stats(text, date)", "player_live(text)"):
+        assert f"revoke all on function public.{fn} from public;" in SQL
+        assert f"grant execute on function public.{fn} to anon, authenticated;" in SQL
+    view = SQL.split("create view public.daily_member_stats_latest", 1)[1].split(";", 1)[0]
+    assert "birth_date" not in view and "race" not in view

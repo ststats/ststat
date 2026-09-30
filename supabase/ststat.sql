@@ -404,6 +404,10 @@ create table if not exists public.daily_member_stats (
   sponsor_updated_at timestamptz,
   primary key (stat_date, soop_id)
 );
+-- 목록 화면(시너지 대학 카드)의 🎂 표시는 생일 '달'만 쓴다. 생년월일 전체 대신 달만 공개하려고 따로 둔다
+-- (저장할 때 DB가 계산해 두므로 조회는 그대로 빠르다).
+alter table public.daily_member_stats add column if not exists birth_month smallint
+  generated always as (extract(month from birth_date)::smallint) stored;
 create index if not exists daily_member_stats_soop_date_idx
   on public.daily_member_stats (soop_id, stat_date desc);
 create index if not exists daily_member_stats_date_idx
@@ -697,15 +701,63 @@ grant select on public.synergy_daily_dates to authenticated;
 -- 가장 최근 날짜의 방송통계. 첫 화면(시너지, StarUniv 방송통계·프로필 팝업)이 날짜 목록을 받은 뒤 그 날짜로
 -- 다시 조회하던 왕복 한 번을 없앤다. security_invoker라 부르는 쪽의 정책(anon은 휴면 제외)과 열 권한이
 -- 그대로 적용되고, 최신 날짜도 그 사람이 볼 수 있는 행 중에서 고른다(synergy_daily_dates의 첫 날짜와 같다).
-create or replace view public.daily_member_stats_latest
+-- security_invoker 뷰는 정의에 적힌 열마다 부르는 쪽의 권한을 본다. 그래서 공개하지 않는 생년월일·종족은
+-- 뷰에 넣지 않는다(넣으면 anon은 생일 달만 골라도 권한 오류). 열 구성이 바뀌어 지우고 다시 만든다.
+drop view if exists public.daily_member_stats_latest;
+create view public.daily_member_stats_latest
 with (security_invoker = true)
 as
-select stat_date, soop_id, nickname, role, affiliation, race, tier, gender, birth_date, balloons, broadcast_seconds,
+select stat_date, soop_id, nickname, role, affiliation, tier, gender, birth_month, balloons, broadcast_seconds,
        cumulative_viewers, sponsor_wins, sponsor_losses, updated_at, sponsor_updated_at
 from public.daily_member_stats
 where stat_date = (select max(stat_date) from public.daily_member_stats);
 
 grant select on public.daily_member_stats_latest to authenticated;
+
+-- 선수를 지정한 조회: 그 화면이 보여 주는 선수만 돌려주므로 휴면이어도 준다(휴면 선수 프로필도 볼 수 있게).
+-- 목록 조회(위 표·뷰)는 지금처럼 휴면을 뺀다. 날짜를 비우면 가장 최근 날짜. security definer라 표 정책을 거치지
+-- 않으므로 돌려주는 열은 각 화면이 보여 주는 것만 적는다.
+-- StarUniv 방송통계·멤버 프로필(Api.stats / statsLatest): 쉼표로 구분한 SOOP ID(최대 300개)의 수치만
+create or replace function public.player_stats(p_ids text, p_date date default null)
+returns table (stat_date date, soop_id text, nickname text, balloons bigint, broadcast_seconds bigint,
+               cumulative_viewers bigint, sponsor_wins integer, sponsor_losses integer, updated_at timestamptz)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select s.stat_date, s.soop_id, s.nickname, s.balloons, s.broadcast_seconds, s.cumulative_viewers,
+         s.sponsor_wins, s.sponsor_losses, s.updated_at
+  from public.daily_member_stats s
+  where s.stat_date = coalesce(p_date, (select max(x.stat_date) from public.daily_member_stats x))
+    and lower(s.soop_id) in (select lower(btrim(i)) from unnest((string_to_array(coalesce(p_ids, ''), ','))[1:300]) i
+                             where btrim(i) <> '')
+  order by s.soop_id;
+$$;
+
+-- 시너지 개인 프로필: 한 명의 프로필 칸(성별·생년월일·종족 등 프로필 화면에 나오는 것)
+create or replace function public.player_profile_stats(p_soop_id text, p_date date default null)
+returns table (stat_date date, soop_id text, nickname text, role text, affiliation text, race text, tier text,
+               gender text, birth_date date, balloons bigint, broadcast_seconds bigint, cumulative_viewers bigint,
+               sponsor_wins integer, sponsor_losses integer, updated_at timestamptz, sponsor_updated_at timestamptz)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select s.stat_date, s.soop_id, s.nickname, s.role, s.affiliation, s.race, s.tier, s.gender, s.birth_date,
+         s.balloons, s.broadcast_seconds, s.cumulative_viewers, s.sponsor_wins, s.sponsor_losses,
+         s.updated_at, s.sponsor_updated_at
+  from public.daily_member_stats s
+  where s.stat_date = coalesce(p_date, (select max(x.stat_date) from public.daily_member_stats x))
+    and lower(s.soop_id) = lower(btrim(coalesce(p_soop_id, '')))
+  limit 1;
+$$;
+
+revoke all on function public.player_stats(text, date) from public;
+revoke all on function public.player_profile_stats(text, date) from public;
+grant execute on function public.player_stats(text, date) to anon, authenticated;
+grant execute on function public.player_profile_stats(text, date) to anon, authenticated;
 
 
 -- ############################################################################
@@ -858,6 +910,23 @@ from public.live_broadcasts
 where scanned_at > now() - interval '5 minutes';
 
 grant select on public.live_broadcasts_current to authenticated;
+
+-- 시너지 개인 프로필의 방송 중 표시: 그 한 명만(휴면 포함 - 프로필 화면이 그 선수를 보여 주므로)
+create or replace function public.player_live(p_soop_id text)
+returns table (broad_no text, broad_title text, current_sum_viewer integer, broad_start text)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select b.broad_no, b.broad_title, b.current_sum_viewer, b.broad_start
+  from public.live_broadcasts b
+  where lower(b.soop_id) = lower(btrim(coalesce(p_soop_id, '')))
+    and b.scanned_at > now() - interval '5 minutes'
+  limit 1;
+$$;
+revoke all on function public.player_live(text) from public;
+grant execute on function public.player_live(text) to anon, authenticated;
 
 -- 수집 상태 한 줄: 마지막 시작·성공 시각, 쪽수·실패 수 같은 요약, 마지막 오류
 create table if not exists public.live_scan_state (
@@ -1056,11 +1125,11 @@ grant select (elo_id,raw_rating,rating,tier,tier_rank,as_of) on public.elo_ranki
 grant select (as_of,tier_counts,tier_levels,race_matchup) on public.elo_ranking_meta to anon;
 grant select (elo_id,month_end,rating) on public.elo_rating_history to anon;
 grant select (elo_id,rating,rating_se) on public.elo_player_ratings to anon;
--- 방송통계(StarUniv core.js)·시너지(대학 카드·프로필): stat_date는 날짜로 거르는 데 쓴다
-grant select (stat_date,soop_id,nickname,role,affiliation,race,tier,gender,birth_date,balloons,broadcast_seconds,
+-- 시너지 대학 카드(목록): 생년월일·종족은 목록에 안 보여 빼고 🎂용 생일 달만. 프로필·StarUniv는 위 player_* 함수로 받는다
+grant select (stat_date,soop_id,nickname,role,affiliation,tier,gender,birth_month,balloons,broadcast_seconds,
   cumulative_viewers,sponsor_wins,sponsor_losses,updated_at,sponsor_updated_at) on public.daily_member_stats to anon;
 grant select (stat_date) on public.synergy_daily_dates to anon;
-grant select (stat_date,soop_id,nickname,role,affiliation,race,tier,gender,birth_date,balloons,broadcast_seconds,
+grant select (stat_date,soop_id,nickname,role,affiliation,tier,gender,birth_month,balloons,broadcast_seconds,
   cumulative_viewers,sponsor_wins,sponsor_losses,updated_at,sponsor_updated_at) on public.daily_member_stats_latest to anon;
 -- 방송 중 표시: live_broadcasts_current는 security_invoker라 표의 열(거르는 scanned_at 포함)도 필요하다
 grant select (soop_id,broad_no,broad_title,current_sum_viewer,broad_start,category_name,broad_cate_no,scanned_at) on public.live_broadcasts to anon;
