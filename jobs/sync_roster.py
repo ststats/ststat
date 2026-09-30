@@ -9,6 +9,7 @@ from models.sync_job import JobResult
 from repositories.roster import (
     candidate_id,
     drop_resolved_candidates,
+    fill_candidates,
     load_linked_elo_ids,
     load_pending_ids,
     load_roster,
@@ -88,6 +89,7 @@ def run() -> JobResult:
     new_candidates: list[RosterCandidate] = []
     seen_candidate_ids: set[str] = set()
     soop_mismatch: list[dict] = []
+    fills: list[dict] = []
 
     for player in api_players:
         if player.elo_id is not None and player.elo_id in linked:
@@ -108,7 +110,18 @@ def run() -> JobResult:
             continue
 
         cid = candidate_id(player.elo_id, player.soop_id)
-        if cid.lower() in pending_ids or cid in seen_candidate_ids:
+        if cid in seen_candidate_ids:
+            continue
+        if cid.lower() in pending_ids:
+            # 이미 대기 명단에 있다(경기 기록에서 먼저 올라왔으면 SOOP ID·티어·소속이 비어 있음).
+            # 티어 목록의 지금 값으로 채우고, 바뀐 게 없으면 쓰지 않는다. 같은 ELO ID가 목록에 두 번 나오면 첫 줄만.
+            seen_candidate_ids.add(cid)
+            row = pending_ids[cid.lower()] or {}
+            info = {"soop_id": player.soop_id or None, "gender": player.gender, "race": player.race,
+                    "tier": player.tier, "affiliation": player.affiliation}
+            changed = {k: v for k, v in info.items() if v is not None and v != row.get(k)}
+            if changed:
+                fills.append({"id": row.get("id") or cid, **changed})
             continue
 
         seen_candidate_ids.add(cid)
@@ -132,15 +145,17 @@ def run() -> JobResult:
         )
 
     candidates_written = upsert_candidates(new_candidates)
+    filled = fill_candidates(fills[:MAX_NEW_CANDIDATES_PER_RUN * 5])
     resolved = drop_resolved_candidates(set(by_elo) | linked)
 
     return JobResult(
         records_read=len(api_players),
-        records_written=candidates_written,
+        records_written=candidates_written + filled,
         records_skipped=max(0, len(api_players) - candidates_written),
         metadata={
             "roster_count": len(members),
             "new_candidates": candidates_written,
+            "candidates_filled": filled,
             "candidates_resolved": resolved,
             "linked_accounts": len(linked),
             # 명단에 ELO ID가 비어 있고 SOOP ID만 같은 경우(어드민 선수 관리에서 ELO ID를 확인해 채우면 된다)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 
 from models.roster import ExistingRosterMember, RosterCandidate
 from repositories.supabase import get_supabase
@@ -73,15 +73,19 @@ def load_linked_elo_ids() -> set[int]:
         start += 1000
 
 
-def load_pending_ids() -> set[str]:
-    """대기 명단 행 id(소문자). 새 id는 'elo:<ELO ID>'."""
+CANDIDATE_INFO = ("soop_id", "gender", "race", "tier", "affiliation")
+
+
+def load_pending_ids() -> dict[str, dict]:
+    """대기 명단 행(상태 무관) {id 소문자: 행}. 새 id는 'elo:<ELO ID>'. 티어 목록 정보(CANDIDATE_INFO)도 같이 읽는다
+    - 경기 기록에서 먼저 올라온 줄은 SOOP ID·티어·소속이 비어 있어, 티어 목록에 나오면 채운다(fill_candidates)."""
     db = get_supabase()
     rows = []
     start = 0
     while True:
         batch = (
             db.table("tier_member_candidates")
-            .select("id")
+            .select("id," + ",".join(CANDIDATE_INFO))
             .order("id")
             .range(start, start + 999)
             .execute()
@@ -93,10 +97,23 @@ def load_pending_ids() -> set[str]:
             break
         start += 1000
     return {
-        str(row.get("id") or "").strip().lower()
+        str(row.get("id") or "").strip().lower(): row
         for row in rows
         if str(row.get("id") or "").strip()
     }
+
+
+def fill_candidates(updates: list[dict]) -> int:
+    """이미 있는 대기 명단 줄의 티어 목록 정보만 고친다(id + CANDIDATE_INFO). 상태·발견일은 그대로."""
+    if not updates:
+        return 0
+    now = datetime.now(timezone.utc).isoformat()
+    db = get_supabase()
+    for row in updates:
+        db.table("tier_member_candidates").update(
+            {**{k: row[k] for k in CANDIDATE_INFO if k in row}, "updated_at": now}
+        ).eq("id", row["id"]).execute()
+    return len(updates)
 
 
 def drop_resolved_candidates(elo_ids: set[int]) -> int:

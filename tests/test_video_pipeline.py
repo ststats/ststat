@@ -94,3 +94,29 @@ def test_unknown_short_is_rechecked_on_the_next_run_and_stored_correctly(monkeyp
     status["code"] = 200
     job.run()
     assert db_videos["vid00000001"]["short"] is True
+
+
+def test_channel_metadata_keeps_stored_values_when_new_value_is_empty(monkeypatch):
+    """RSS로 받은 채널 정보에는 업로드 목록 ID가 없다 - 저장된 값을 지우지 않는다."""
+    from repositories import videos
+    sent = {}
+
+    class Q:
+        def update(self, payload):
+            sent.update(payload)
+            return self
+
+        def eq(self, *a):
+            return self
+
+        def execute(self):
+            return None
+
+    class DB:
+        def table(self, name):
+            return Q()
+
+    monkeypatch.setattr(videos, "get_supabase", lambda: DB())
+    videos.update_channel_metadata("u", {"id": "UC1", "title": "t", "thumb": "", "uploads": ""})
+    assert sent["channel_id"] == "UC1" and sent["title"] == "t"
+    assert "thumb" not in sent and "uploads" not in sent
