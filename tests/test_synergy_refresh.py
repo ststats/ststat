@@ -12,8 +12,14 @@ def _setup(monkeypatch, days, matches, rows_by_day):
     published = {}
     monkeypatch.setattr(repo, "snapshot_dates_between", lambda a, b: [d for d in days if a <= d <= b])
     monkeypatch.setattr(repo, "_paged_matches", lambda a, b: [m for m in matches if a <= m["match_date"] <= b])
-    monkeypatch.setattr(repo, "load_daily_snapshot_rows", lambda d: [dict(r) for r in rows_by_day[d]])
+    full_loads = []
+    def load(d, columns=repo.DAILY_SNAPSHOT_COLUMNS):
+        if columns == repo.DAILY_SNAPSHOT_COLUMNS:
+            full_loads.append(d)
+        return [dict(r) for r in rows_by_day[d]]
+    monkeypatch.setattr(repo, "load_daily_snapshot_rows", load)
     monkeypatch.setattr(repo, "upsert_daily_snapshot", lambda d, rows: published.setdefault(d, rows) and len(rows))
+    published["_full_loads"] = full_loads
     return published
 
 
@@ -29,7 +35,9 @@ def test_late_match_updates_only_days_on_or_after_it(monkeypatch):
 
     result = repo.refresh_sponsor_stats("2026-09-01", "2026-09-30")
 
-    assert sorted(published) == ["2026-09-10", "2026-09-20"]
+    assert sorted(k for k in published if not k.startswith("_")) == ["2026-09-10", "2026-09-20"]
+    # 전체 행은 바뀐 날만 받는다
+    assert published["_full_loads"] == ["2026-09-10", "2026-09-20"]
     a = next(r for r in published["2026-09-20"] if r["soop_id"] == "a")
     assert (a["sponsor_wins"], a["sponsor_losses"]) == (2, 0)
     assert result["rows_changed"] == 4
@@ -60,7 +68,7 @@ def test_months_are_counted_separately_and_unchanged_days_are_not_republished(mo
     }
     published = _setup(monkeypatch, days, matches, rows)
     result = repo.refresh_sponsor_stats("2026-08-01", "2026-09-30")
-    assert published == {}
+    assert published == {"_full_loads": []}   # 바뀐 날이 없으면 전체 행을 한 번도 받지 않는다
     assert result["days_checked"] == 2
 
 
@@ -186,3 +194,15 @@ def test_eloboard_failure_still_publishes_but_defers_month_confirmation(monkeypa
     monkeypatch.setenv("ELOBOARD_OK", "true")
     job.run()
     assert calls.get("confirm") is True
+
+
+def test_confirmed_months_do_not_load_the_roster(monkeypatch):
+    """이미 확정된 달은 월말 명단(전체 행)을 내려받지 않는다."""
+    from jobs import sync_synergy_daily as job
+    loads = []
+    monkeypatch.setattr(job, "first_snapshot_date", lambda: "2025-10-01")
+    monkeypatch.setattr(job, "existing_snapshot_count", lambda d: 5)
+    monkeypatch.setattr(job, "get_month_confirmation", lambda m: {"poonggo_complete": True, "sponsor_complete": True})
+    monkeypatch.setattr(job, "load_snapshot_roster", lambda d: loads.append(d) or [object()])
+    result = job._confirm_closed_months(date(2026, 9, 30))
+    assert loads == [] and result["checked"] == 0

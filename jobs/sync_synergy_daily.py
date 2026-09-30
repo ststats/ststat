@@ -118,15 +118,16 @@ def _confirm_closed_months(today: date) -> dict:
             month = _previous_month(month)
             continue
 
-        roster = load_snapshot_roster(last_day_str)
-        if not roster:
-            raise RuntimeError(f"Published snapshot roster is empty for {last_day_str}")
-
+        # 이미 확정된 달은 명단(월말 전체 행)을 받지 않고 넘어간다 - 매 실행 최대 12개월치를 받던 것 방지
         month_start_str = month.isoformat()
         flags = get_month_confirmation(month_start_str)
         if flags.get("poonggo_complete") and flags.get("sponsor_complete"):
             month = _previous_month(month)
             continue
+
+        roster = load_snapshot_roster(last_day_str)
+        if not roster:
+            raise RuntimeError(f"Published snapshot roster is empty for {last_day_str}")
 
         checked += 1
         poonggo_ok = bool(flags.get("poonggo_complete"))
