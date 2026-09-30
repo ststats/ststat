@@ -116,8 +116,6 @@ def run() -> JobResult:
             'snapshot_id': snapshot_id,
             'as_of': as_of,
             'player_stats': counts['player_stats'],
-            'h2h_rows': counts['h2h'],
-            'race_rows': counts['race'],
             'ranked_players': counts['rankings'],
             'rated_players': counts['player_ratings'],
             'rating_history_rows': counts['history'],

@@ -181,8 +181,8 @@ def test_split_ranges_cover_everything_without_overlap():
 def test_insert_writes_every_row_in_chunks_with_snapshot_id(fake):
     db = fake(FakeDB())
     rows = [{'n': i} for i in range(2345)]
-    assert repo._insert('elo_h2h_stats', rows, 'snap', chunk=100) == 2345
-    stored = db.tables['elo_h2h_stats']
+    assert repo._insert('elo_player_stats', rows, 'snap', chunk=100) == 2345
+    stored = db.tables['elo_player_stats']
     assert sorted(r['n'] for r in stored) == list(range(2345))
     assert all(r['snapshot_id'] == 'snap' for r in stored)
     assert 'snapshot_id' not in rows[0]  # 원본은 건드리지 않는다
@@ -213,7 +213,7 @@ def test_insert_failure_propagates(fake, monkeypatch):
             raise RuntimeError('insert failed')
     monkeypatch.setattr(repo, '_insert_chunk', boom)
     with pytest.raises(RuntimeError, match='insert failed'):
-        repo._insert('elo_h2h_stats', [{'n': i} for i in range(1000)], 'snap', chunk=100)
+        repo._insert('elo_player_stats', [{'n': i} for i in range(1000)], 'snap', chunk=100)
 
 
 def test_cleanup_removes_only_old_orphan_building_snapshots(fake):
