@@ -678,7 +678,8 @@ grant select on public.elo_public_players, public.elo_public_matches to authenti
 alter table public.daily_member_stats enable row level security;
 drop policy if exists synergy_daily_public_read on public.daily_member_stats;
 drop policy if exists synergy_daily_admin_read on public.daily_member_stats;
--- 생일·성별 포함 공개: 시너지 프로필에 표시한다(운영 결정 2026-09-26, staruniv.sql 2번 참고).
+-- 목록 조회용 공개 규칙. 생년월일·종족은 목록에 안 보여 열 권한(14번)에서 빼고, 선수 한 명의 칸(프로필)은
+-- player_stats·player_profile_stats 함수가 휴면 여부와 관계없이 준다(운영 결정 2026-09-30).
 -- 다만 그날 소속이 휴면인 행은 두 사이트 어디에도 나오지 않으므로 공개하지 않는다(운영 결정 2026-09-27).
 -- 행마다 그날의 소속이 들어 있어서, 지난 달에 대학 소속이었던 기록은 지금 휴면이어도 그대로 보인다.
 create policy synergy_daily_public_read on public.daily_member_stats
