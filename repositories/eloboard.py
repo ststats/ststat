@@ -21,9 +21,9 @@ def load_categories() -> dict[str, int]:
     return {str(r.get("name") or ""): int(r["category_id"]) for r in rows}
 
 
-def ensure_categories(names: set[str]) -> dict[str, int]:
+def ensure_categories(names: set[str], current: dict[str, int] | None = None) -> dict[str, int]:
     db = get_supabase()
-    current = load_categories()
+    current = dict(current) if current is not None else load_categories()
     next_id = max(current.values(), default=-1) + 1
     new_rows = []
     for name in sorted(names):
@@ -33,11 +33,29 @@ def ensure_categories(names: set[str]) -> dict[str, int]:
         new_rows.append({"category_id": next_id, "name": name})
         next_id += 1
     if new_rows:
-        db.table("elo_categories").upsert(new_rows, on_conflict="category_id").execute()
+        db.table("elo_categories").upsert(new_rows, on_conflict="category_id", returning="minimal").execute()
     return current
 
 
+# 한 번 실행(sync_eloboard) 안에서 형식 목록을 여러 번 읽지 않게 upsert_dimensions가 채워 두고 upsert_matches가 쓴다
+_categories: dict[str, int] | None = None
+MATCH_CHUNK = 2000
+
+
+def _upsert_batch(players=(), maps=(), matches=()) -> dict | None:
+    """바뀐 행만 쓰는 DB 함수(upsert_elo_batch, ststat.sql). 아직 없으면(SQL 적용 전) None."""
+    try:
+        return get_supabase().rpc("upsert_elo_batch", {
+            "p_players": list(players), "p_maps": list(maps), "p_matches": list(matches),
+        }).execute().data
+    except Exception as exc:
+        if "upsert_elo_batch" in str(exc) and ("PGRST202" in str(exc) or "Could not find" in str(exc)):
+            return None
+        raise
+
+
 def upsert_dimensions(matches: list[EloMatch]) -> dict[str, int]:
+    global _categories
     if not matches:
         return {"players": 0, "maps": 0, "categories": 0}
     db = get_supabase()
@@ -58,20 +76,27 @@ def upsert_dimensions(matches: list[EloMatch]) -> dict[str, int]:
     for elo_id, name in names.items():
         race = race_counts[elo_id].most_common(1)[0][0] if race_counts[elo_id] else None
         players.append({"elo_id": elo_id, "name": name, "race": race})
-    if players:
-        db.table("elo_players").upsert(players, on_conflict="elo_id").execute()
-    if maps:
-        db.table("elo_maps").upsert([{"map_id": k, "name": v} for k, v in maps.items()], on_conflict="map_id").execute()
+    map_rows = [{"map_id": k, "name": v} for k, v in maps.items()]
+    changed = _upsert_batch(players, map_rows)
+    if changed is None:   # 예전 방식(전부 upsert, 응답 본문은 받지 않는다)
+        if players:
+            db.table("elo_players").upsert(players, on_conflict="elo_id", returning="minimal").execute()
+        if map_rows:
+            db.table("elo_maps").upsert(map_rows, on_conflict="map_id", returning="minimal").execute()
+        changed = {"players": len(players), "maps": len(map_rows)}
     before = load_categories()
-    ensure_categories(categories)
-    return {"players": len(players), "maps": len(maps), "categories": max(0, len(categories - set(before)))}
+    _categories = ensure_categories(categories, before)
+    return {"players": int(changed.get("players") or 0), "maps": int(changed.get("maps") or 0),
+            "categories": max(0, len(categories - set(before)))}
 
 
 def upsert_matches(matches: list[EloMatch]) -> int:
+    """경기를 저장하고 실제로 바뀐(새로 넣거나 고친) 행 수를 돌려준다."""
     if not matches:
         return 0
     db = get_supabase()
-    categories = ensure_categories({m.category for m in matches})
+    names = {m.category for m in matches}
+    categories = _categories if _categories is not None and names <= set(_categories) else ensure_categories(names, _categories)
     payload = [
         {
             "elo_match_id": m.elo_match_id,
@@ -83,10 +108,18 @@ def upsert_matches(matches: list[EloMatch]) -> int:
         }
         for m in matches
     ]
-    # Keep request payloads moderate for PostgREST.
-    for start in range(0, len(payload), 500):
-        db.table("elo_matches").upsert(payload[start:start + 500], on_conflict="elo_match_id").execute()
-    return len(payload)
+    changed = 0
+    for start in range(0, len(payload), MATCH_CHUNK):
+        chunk = payload[start:start + MATCH_CHUNK]
+        res = _upsert_batch(matches=chunk)
+        if res is None:
+            # 예전 방식: PostgREST 요청을 적당한 크기로 나눠 전부 upsert
+            for s2 in range(0, len(chunk), 500):
+                db.table("elo_matches").upsert(chunk[s2:s2 + 500], on_conflict="elo_match_id", returning="minimal").execute()
+            changed += len(chunk)
+        else:
+            changed += int(res.get("matches") or 0)
+    return changed
 
 
 def load_match_ids_between(start_date: str, end_date: str) -> set[int]:

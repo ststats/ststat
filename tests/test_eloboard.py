@@ -204,3 +204,63 @@ def test_backup_is_saved_before_deleting_and_failure_blocks_deletion(monkeypatch
     with pytest.raises(RuntimeError, match="backup write failed"):
         job.run()
     assert "deleted" not in saved
+
+
+class _FakeExec:
+    def __init__(self, data=None, exc=None):
+        self._data, self._exc = data, exc
+    def execute(self):
+        if self._exc:
+            raise self._exc
+        return type("R", (), {"data": self._data})()
+
+
+class _FakeTable:
+    def __init__(self, db, name):
+        self.db, self.name = db, name
+    def select(self, *a, **k): return self
+    def order(self, *a, **k): return self
+    def upsert(self, rows, **kw):
+        self.db.upserts.append((self.name, len(rows), kw.get("returning")))
+        return _FakeExec([])
+    def execute(self):
+        return type("R", (), {"data": [{"category_id": 0, "name": "대학"}] if self.name == "elo_categories" else []})()
+
+
+class _FakeDb:
+    def __init__(self, rpc_missing=False):
+        self.rpc_missing, self.rpcs, self.upserts = rpc_missing, [], []
+    def table(self, name): return _FakeTable(self, name)
+    def rpc(self, fn, params):
+        if self.rpc_missing:
+            return _FakeExec(exc=Exception("{'code': 'PGRST202', 'message': 'Could not find the function public.upsert_elo_batch'}"))
+        self.rpcs.append((fn, {k: len(v) for k, v in params.items()}))
+        return _FakeExec({"players": 1, "maps": 0, "matches": 3})
+
+
+def _matches(n):
+    from models.eloboard import EloMatch, EloParticipant
+    return [EloMatch(elo_match_id=i, match_date="2026-09-01", winner=EloParticipant(1, "a", "T", "W"), loser=EloParticipant(2, "b", "Z", "L"),
+                     map_id=None, map_name=None, category="대학") for i in range(n)]
+
+
+def test_upsert_writes_only_changes_via_db_function(monkeypatch):
+    import repositories.eloboard as repo
+    db = _FakeDb()
+    monkeypatch.setattr(repo, "get_supabase", lambda: db)
+    ms = _matches(4500)
+    assert repo.upsert_dimensions(ms)["players"] == 1
+    assert repo.upsert_matches(ms) == 9          # 3개씩 바뀌었다고 답한 묶음 3개(2000·2000·500)
+    assert [p["p_matches"] for _, p in db.rpcs[1:]] == [2000, 2000, 500]
+    assert not [u for u in db.upserts if u[0] in ("elo_matches", "elo_players")]
+
+
+def test_upsert_falls_back_before_sql_is_applied(monkeypatch):
+    import repositories.eloboard as repo
+    db = _FakeDb(rpc_missing=True)
+    monkeypatch.setattr(repo, "get_supabase", lambda: db)
+    ms = _matches(1200)
+    repo.upsert_dimensions(ms)
+    assert repo.upsert_matches(ms) == 1200
+    assert all(u[2] == "minimal" for u in db.upserts)
+    assert [u[1] for u in db.upserts if u[0] == "elo_matches"] == [500, 500, 200]

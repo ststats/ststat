@@ -326,6 +326,55 @@ grant execute on function public.elo_derived_source_signature() to service_role;
 -- [경기id, 날짜, 승자, 패자, 맵, 형식] 배열의 배열 하나로 준다. 표를 그대로 읽으면 한 번에 1000행
 -- 제한 때문에 수백 번 요청해야 하고 행마다 열 이름이 되풀이되는데, 이 함수는 구간당 한 번이면 된다.
 -- 함수가 없으면 파이프라인은 예전처럼 표를 페이지로 읽는다.
+-- 수집 저장(jobs/sync_eloboard.py): 4시간마다 이번 달(+지난달 끝) 경기를 다시 받아 넣는데 대부분 그대로다.
+-- 예전처럼 전부 upsert하면 같은 값으로 수천 행을 매번 다시 쓴다. 기존 행과 다른 것만 쓰고, 바꾼 수를 돌려준다.
+-- 표 정의는 staruniv.sql 3번(elo_players/elo_maps/elo_matches).
+create or replace function public.upsert_elo_batch(p_players jsonb, p_maps jsonb, p_matches jsonb)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  n_players integer;
+  n_maps integer;
+  n_matches integer;
+begin
+  insert into public.elo_players as t (elo_id, name, race)
+  select distinct on (r.elo_id) r.elo_id, r.name, r.race
+  from jsonb_to_recordset(coalesce(p_players, '[]'::jsonb)) as r(elo_id integer, name text, race text)
+  where r.elo_id is not null and r.name is not null
+  on conflict (elo_id) do update set name = excluded.name, race = excluded.race
+    where (t.name, t.race) is distinct from (excluded.name, excluded.race);
+  get diagnostics n_players = row_count;
+
+  insert into public.elo_maps as t (map_id, name)
+  select distinct on (r.map_id) r.map_id, r.name
+  from jsonb_to_recordset(coalesce(p_maps, '[]'::jsonb)) as r(map_id integer, name text)
+  where r.map_id is not null and r.name is not null
+  on conflict (map_id) do update set name = excluded.name
+    where t.name is distinct from excluded.name;
+  get diagnostics n_maps = row_count;
+
+  insert into public.elo_matches as t (elo_match_id, match_date, winner_elo_id, loser_elo_id, map_id, category_id)
+  select distinct on (r.elo_match_id) r.elo_match_id, r.match_date, r.winner_elo_id, r.loser_elo_id, r.map_id, r.category_id
+  from jsonb_to_recordset(coalesce(p_matches, '[]'::jsonb)) as r(
+    elo_match_id bigint, match_date date, winner_elo_id integer, loser_elo_id integer, map_id integer, category_id smallint)
+  where r.elo_match_id is not null
+  on conflict (elo_match_id) do update
+    set match_date = excluded.match_date, winner_elo_id = excluded.winner_elo_id, loser_elo_id = excluded.loser_elo_id,
+        map_id = excluded.map_id, category_id = excluded.category_id
+    where (t.match_date, t.winner_elo_id, t.loser_elo_id, t.map_id, t.category_id)
+      is distinct from (excluded.match_date, excluded.winner_elo_id, excluded.loser_elo_id, excluded.map_id, excluded.category_id);
+  get diagnostics n_matches = row_count;
+
+  return jsonb_build_object('players', n_players, 'maps', n_maps, 'matches', n_matches);
+end;
+$$;
+
+revoke all on function public.upsert_elo_batch(jsonb, jsonb, jsonb) from public, anon, authenticated;
+grant execute on function public.upsert_elo_batch(jsonb, jsonb, jsonb) to service_role;
+
 create or replace function public.elo_matches_compact(p_after bigint, p_upto bigint)
 returns json
 language sql
@@ -1069,6 +1118,7 @@ declare
   n_del integer;
   n_up integer;
 begin
+  drop table if exists _mp_new;   -- 같은 트랜잭션에서 두 번 불려도 되게
   create temp table _mp_new on commit drop as
   select lower(r.soop_id) as sid, r.soop_id, r.title_no, r.reg_date, coalesce(r.total_pages, 1) as total_pages, r.post
   from jsonb_to_recordset(coalesce(p_rows, '[]'::jsonb)) as r(
