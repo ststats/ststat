@@ -13,6 +13,8 @@ env:
   STSTAT_ENV: production
   PYTHONUNBUFFERED: "1"
 
+# 공유 DB 일시 오류로 회차가 통째로 실패하지 않게, 두 번 돌려도 같은 작업은 scripts/retry_job.sh로 1분 뒤 한 번 더 시도한다.
+# EloBoard 수집(sync_eloboard)은 삭제 판정이 앞 실행 기록에 기대고 외부 요청도 늘어나서 다시 시도하지 않는다.
 jobs:
   # 테스트(test.yml)를 먼저 돌리고, 통과해야 공유 DB에 쓰는 작업을 시작한다.
   test:
@@ -29,7 +31,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -r requirements.txt
-      - run: python scripts/run_job.py healthcheck
+      - run: bash scripts/retry_job.sh healthcheck
       # 명단 동기화가 실패해도 지금 DB에 있는 명단으로 뒤 작업(경기 수집·파생·시너지)을 계속한다.
       # 실패는 sync_jobs와 Actions 경고로 남는다. 연결·스키마 점검(healthcheck) 실패는 그대로 멈춘다.
       - name: Sync roster
@@ -64,7 +66,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -r requirements.txt
-      - run: python scripts/run_job.py calculate_eloboard_stats
+      - run: bash scripts/retry_job.sh calculate_eloboard_stats
 
   # 별풍선·방송시간·시청자(Poonggo)는 EloBoard와 따로 오므로, 경기 수집이 실패해도 갱신한다.
   # 경기 수집이 끝나기는 기다린다(수집 도중의 경기를 읽지 않게). 실패했으면 스폰 승패는 DB에 있는 경기로 세고
@@ -83,7 +85,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -r requirements.txt
-      - run: python scripts/run_job.py sync_synergy_daily
+      - run: bash scripts/retry_job.sh sync_synergy_daily
 
   videos:
     needs: test
@@ -98,7 +100,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -r requirements.txt
-      - run: python scripts/run_job.py sync_videos
+      - run: bash scripts/retry_job.sh sync_videos
 
   audit:
     needs: test
@@ -111,4 +113,4 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -r requirements.txt
-      - run: python scripts/run_job.py audit_match_rounds
+      - run: bash scripts/retry_job.sh audit_match_rounds
