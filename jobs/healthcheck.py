@@ -4,7 +4,7 @@ from repositories.supabase import get_supabase
 # 뒤 작업들이 쓰는 표·뷰. 하나라도 없으면 SQL(supabase/ststat.sql)이 안 돌았거나 최신이 아니다.
 REQUIRED_TABLES = (
     "sync_jobs", "tier_members", "elo_players", "elo_matches", "elo_derived_snapshots",
-    "elo_h2h_stats", "elo_player_ratings", "daily_member_stats", "poonggo_monthly_stats",
+    "elo_player_stats", "elo_player_ratings", "daily_member_stats", "poonggo_monthly_stats",
     "synergy_month_confirmations", "synergy_daily_dates", "videos", "video_channels",
 )
 # 최신 ststat.sql에서 생긴 함수. 호출이 되면 스키마가 최신이라는 뜻이다.

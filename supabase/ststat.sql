@@ -171,31 +171,10 @@ create table if not exists public.elo_player_stats (
 );
 create index if not exists elo_player_stats_elo_idx on public.elo_player_stats(elo_id);
 
-create table if not exists public.elo_h2h_stats (
-  snapshot_id uuid not null references public.elo_derived_snapshots(snapshot_id) on delete cascade,
-  player_elo_id integer not null references public.elo_players(elo_id) on delete cascade,
-  opponent_elo_id integer not null references public.elo_players(elo_id) on delete cascade,
-  games integer not null default 0,
-  wins integer not null default 0,
-  losses integer not null default 0,
-  win_rate numeric(7,4),
-  last_match_date date,
-  primary key (snapshot_id, player_elo_id, opponent_elo_id)
-);
-create index if not exists elo_h2h_stats_player_idx on public.elo_h2h_stats(player_elo_id);
-create index if not exists elo_h2h_stats_opponent_idx on public.elo_h2h_stats(opponent_elo_id);
-
-create table if not exists public.elo_race_stats (
-  snapshot_id uuid not null references public.elo_derived_snapshots(snapshot_id) on delete cascade,
-  elo_id integer not null references public.elo_players(elo_id) on delete cascade,
-  opponent_race text not null,
-  games integer not null default 0,
-  wins integer not null default 0,
-  losses integer not null default 0,
-  win_rate numeric(7,4),
-  primary key (snapshot_id, elo_id, opponent_race)
-);
-create index if not exists elo_race_stats_elo_idx on public.elo_race_stats(elo_id);
+-- 상대전적·종족별 통계 표(elo_h2h_stats, elo_race_stats)는 없앴다. 두 사이트 어디서도 읽지 않았고(상대전적 화면은
+-- 선수별 경기 목록으로 직접 센다) 계산할 때마다 수만 행을 새로 써서 DB 쓰기만 늘렸다(운영 결정 2026-09-30).
+drop table if exists public.elo_h2h_stats;
+drop table if exists public.elo_race_stats;
 
 create table if not exists public.elo_rankings (
   snapshot_id uuid not null references public.elo_derived_snapshots(snapshot_id) on delete cascade,
@@ -279,8 +258,6 @@ grant execute on function public.activate_elo_derived_snapshot(uuid) to service_
 -- Public readers can only see rows belonging to the active snapshot.
 alter table public.elo_derived_snapshots enable row level security;
 alter table public.elo_player_stats enable row level security;
-alter table public.elo_h2h_stats enable row level security;
-alter table public.elo_race_stats enable row level security;
 alter table public.elo_rankings enable row level security;
 alter table public.elo_ranking_meta enable row level security;
 alter table public.elo_rating_history enable row level security;
@@ -306,15 +283,15 @@ begin
   create policy elo_derived_snapshots_public_read on public.elo_derived_snapshots
     for select to anon, authenticated using (status='active');
 
-  foreach t in array array['elo_player_stats','elo_h2h_stats','elo_race_stats','elo_rankings','elo_ranking_meta','elo_rating_history'] loop
+  foreach t in array array['elo_player_stats','elo_rankings','elo_ranking_meta','elo_rating_history'] loop
     execute format('drop policy if exists %I on public.%I', t || '_public_read', t);
     execute format('create policy %I on public.%I for select to anon, authenticated using (snapshot_id = (select public.active_elo_snapshot_id()))', t || '_public_read', t);
   end loop;
 end $$;
 
 -- 익명(anon) 공개 범위는 14번에서 열 단위로 정한다.
-grant select on public.elo_derived_snapshots, public.elo_player_stats, public.elo_h2h_stats,
-  public.elo_race_stats, public.elo_rankings, public.elo_ranking_meta, public.elo_rating_history to authenticated;
+grant select on public.elo_derived_snapshots, public.elo_player_stats,
+  public.elo_rankings, public.elo_ranking_meta, public.elo_rating_history to authenticated;
 grant select on public.elo_player_matches to authenticated;
 
 -- 파생 계산 입력의 지문. 파이프라인은 하루 여러 번 돌지만 경기·선수·형식·티어표가 그대로면 결과도 같다.
@@ -1111,7 +1088,7 @@ grant execute on function public.replace_member_posts(jsonb, text[], text[]) to 
 -- Supabase는 public의 새 표·뷰에 anon 권한을 기본으로 주므로, 여기서 전부 회수한 뒤 필요한 열만 다시 준다.
 -- 행 범위는 각 표의 정책(휴면 제외, 활성 스냅샷만)이 정한다. StarUniv 기본 표는 staruniv.sql 2번이 같은 원칙으로 관리한다.
 -- 페이지가 새 열을 읽게 되면 여기에 더한다(없으면 그 조회가 권한 오류로 실패한다).
-revoke all on public.elo_derived_snapshots, public.elo_player_stats, public.elo_h2h_stats, public.elo_race_stats,
+revoke all on public.elo_derived_snapshots, public.elo_player_stats,
   public.elo_rankings, public.elo_ranking_meta, public.elo_rating_history, public.elo_player_ratings,
   public.elo_player_matches, public.elo_public_players, public.elo_public_matches,
   public.elo_players, public.elo_matches, public.elo_maps, public.elo_categories,

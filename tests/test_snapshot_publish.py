@@ -14,7 +14,7 @@ def test_cleanup_failure_does_not_mark_active_snapshot_failed():
         patch.object(calculate_eloboard_stats, "build_payload", return_value=payload),
         patch.object(calculate_eloboard_stats, "create_snapshot", return_value="snapshot"),
         patch.object(calculate_eloboard_stats, "write_snapshot", return_value={
-            "player_stats": 1, "h2h": 1, "race": 1,
+            "player_stats": 1,
             "rankings": 1, "player_ratings": 1, "history": 1, "meta": 1,
         }),
         patch.object(calculate_eloboard_stats, "activate_snapshot") as activate,
@@ -49,7 +49,7 @@ def test_recalculates_when_active_snapshot_has_no_stats():
     code = calculate_eloboard_stats._code_fingerprint()
     active = {"snapshot_id": "s1", "as_of": "2026-09-27", "metadata": {"source_signature": f"db1#{code}"}}
     payload = {"ranking_meta": {"as_of": "2026-09-27"}}
-    counts = {"player_stats": 1, "h2h": 1, "race": 1, "rankings": 1, "player_ratings": 1, "history": 1, "meta": 1}
+    counts = {"player_stats": 1, "rankings": 1, "player_ratings": 1, "history": 1, "meta": 1}
     with (
         patch.object(calculate_eloboard_stats, "cleanup_old_snapshots"),
         patch.object(calculate_eloboard_stats, "load_source_signature", return_value="db1"),
@@ -72,7 +72,7 @@ def test_recalculates_when_active_snapshot_has_no_stats():
 def test_recalculates_and_stores_signature_when_source_changed():
     active = {"snapshot_id": "s1", "as_of": "2026-09-27", "metadata": {"source_signature": "db0#old"}}
     payload = {"ranking_meta": {"as_of": "2026-09-27"}}
-    counts = {"player_stats": 1, "h2h": 1, "race": 1, "rankings": 1, "player_ratings": 1, "history": 1, "meta": 1}
+    counts = {"player_stats": 1, "rankings": 1, "player_ratings": 1, "history": 1, "meta": 1}
     with (
         patch.object(calculate_eloboard_stats, "cleanup_old_snapshots"),
         patch.object(calculate_eloboard_stats, "load_source_signature", return_value="db1"),

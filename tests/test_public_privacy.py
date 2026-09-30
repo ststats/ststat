@@ -79,7 +79,7 @@ def test_anon_gets_only_the_columns_pages_read():
     assert "scanned_at" not in grants["live_broadcasts_current"]
     # 선수 목록은 검색·요약 카드에 나오는 열만(승수·마지막 경기일은 화면에 없다)
     assert not {"wins", "last_match_date"} & grants["elo_public_players"]
-    for hidden in ("elo_player_matches", "elo_player_stats", "elo_h2h_stats", "elo_matches", "rounds_effective"):
+    for hidden in ("elo_player_matches", "elo_player_stats", "elo_matches", "rounds_effective"):
         assert hidden not in grants
 
 

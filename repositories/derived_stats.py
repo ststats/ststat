@@ -253,8 +253,6 @@ def _insert(table: str, rows: list[dict], snapshot_id: str, chunk: int = WRITE_C
 def write_snapshot(snapshot_id: str, payload: dict) -> dict:
     counts = {
         'player_stats': _insert('elo_player_stats', payload['player_stats'], snapshot_id),
-        'h2h': _insert('elo_h2h_stats', payload['h2h'], snapshot_id),
-        'race': _insert('elo_race_stats', payload['race_stats'], snapshot_id),
         'rankings': _insert('elo_rankings', payload['rankings'], snapshot_id),
         'player_ratings': _insert('elo_player_ratings', payload['player_ratings'], snapshot_id),
         'history': _insert('elo_rating_history', payload['rating_history'], snapshot_id),

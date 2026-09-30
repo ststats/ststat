@@ -178,7 +178,6 @@ def run() -> JobResult:
             "maps_upserted": dimensions["maps"],
             "categories_added": dimensions["categories"],
             "valid_ratio": valid_ratio,
-            "h2h_calculated": False,
             "rankings_calculated": False,
         },
     )

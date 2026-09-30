@@ -2,7 +2,7 @@
 from processors.eloboard_derived import aggregate_source, player_ratings_from_index, rankings_from_index
 
 
-def test_aggregate_source_directional_h2h_and_race():
+def test_aggregate_source_player_totals():
     source = {
         'players': [
             {'elo_id': 1, 'race': 'T'},
@@ -14,13 +14,22 @@ def test_aggregate_source_directional_h2h_and_race():
             {'winner_elo_id': 1, 'loser_elo_id': 2, 'match_date': '2026-09-03'},
         ],
     }
-    players, h2h, race = aggregate_source(source)
+    players = aggregate_source(source)
     p1 = next(x for x in players if x['elo_id'] == 1)
     assert (p1['total_games'], p1['wins'], p1['losses']) == (3, 2, 1)
-    row = next(x for x in h2h if x['player_elo_id'] == 1 and x['opponent_elo_id'] == 2)
-    assert (row['games'], row['wins'], row['losses']) == (3, 2, 1)
-    rr = next(x for x in race if x['elo_id'] == 1 and x['opponent_race'] == 'Z')
-    assert (rr['games'], rr['wins']) == (3, 2)
+    assert p1['last_match_date'] == '2026-09-03'
+    p2 = next(x for x in players if x['elo_id'] == 2)
+    assert (p2['total_games'], p2['wins'], p2['losses']) == (3, 1, 2)
+
+
+def test_unused_h2h_and_race_tables_are_not_written():
+    import inspect
+    from repositories import derived_stats
+    src = inspect.getsource(derived_stats.write_snapshot)
+    assert 'elo_h2h_stats' not in src and 'elo_race_stats' not in src
+    sql = open('supabase/ststat.sql', encoding='utf-8').read()
+    assert 'drop table if exists public.elo_h2h_stats;' in sql and 'drop table if exists public.elo_race_stats;' in sql
+    assert 'create table if not exists public.elo_h2h_stats' not in sql
 
 
 def test_rankings_from_index():
