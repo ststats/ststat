@@ -45,12 +45,17 @@ def update_channel_metadata(channel_url: str, info: dict) -> None:
 
     display_name/source_order/active are admin-owned and intentionally omitted.
     """
+    # 빈 값은 쓰지 않는다: API가 실패해 RSS로 받으면 업로드 목록 ID가 없고, 채널 페이지에서 썸네일을
+    # 못 읽을 때도 있다. 그걸로 저장된 값을 지우면 다음 실행이 채널을 처음부터 다시 찾는다.
+    fields = {
+        "channel_id": info.get("id"),
+        "title": info.get("title"),
+        "thumb": info.get("thumb"),
+        "uploads": info.get("uploads"),
+    }
     db = get_supabase()
     db.table("video_channels").update({
-        "channel_id": info.get("id") or None,
-        "title": info.get("title") or None,
-        "thumb": info.get("thumb") or None,
-        "uploads": info.get("uploads") or None,
+        **{k: v for k, v in fields.items() if v},
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }).eq("channel_url", channel_url).execute()
 

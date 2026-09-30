@@ -54,7 +54,8 @@ def _run(monkeypatch, members, api, pending=(), linked=()):
                              race='테란', tier='5', affiliation=None) for p in api]
     out = {}
     monkeypatch.setattr(job, 'load_roster', lambda: rows)
-    monkeypatch.setattr(job, 'load_pending_ids', lambda: set(pending))
+    pend = pending if isinstance(pending, dict) else {k: {'id': k} for k in pending}
+    monkeypatch.setattr(job, 'load_pending_ids', lambda: pend)
     monkeypatch.setattr(job, 'load_linked_elo_ids', lambda: set(linked))
     monkeypatch.setattr(job, 'fetch_tier_players', lambda: players)
     def cands(c):
@@ -63,6 +64,11 @@ def _run(monkeypatch, members, api, pending=(), linked=()):
         return len(c)
     monkeypatch.setattr(job, 'upsert_candidates', cands)
     monkeypatch.setattr(job, 'drop_resolved_candidates', lambda ids: 0)
+    def fill(rows):
+        if rows:
+            out['fills'] = rows
+        return len(rows)
+    monkeypatch.setattr(job, 'fill_candidates', fill)
     return job.run(), out
 
 
@@ -85,6 +91,18 @@ def test_already_pending_elo_id_is_not_staged_again(monkeypatch):
     result, out = _run(monkeypatch, [{'soop': 'a', 'elo': 1}], [{'soop': 'x', 'name': '신입', 'elo': 555}],
                        pending={'elo:555'})
     assert 'cands' not in out
+
+
+def test_pending_match_candidate_gets_tier_list_info(monkeypatch):
+    """경기 기록에서 먼저 올라온 줄(SOOP ID·티어 없음)은 티어 목록에 나오면 채운다. 같은 값이면 쓰지 않는다."""
+    result, out = _run(monkeypatch, [{'soop': 'a', 'elo': 1}], [{'soop': 'x', 'name': '신입', 'elo': 555}],
+                       pending={'elo:555': {'id': 'elo:555', 'race': 'T'}})
+    assert 'cands' not in out
+    assert out['fills'] == [{'id': 'elo:555', 'soop_id': 'x', 'race': '테란', 'tier': '5'}]
+    assert result.metadata['candidates_filled'] == 1
+    result, out = _run(monkeypatch, [{'soop': 'a', 'elo': 1}], [{'soop': 'x', 'name': '신입', 'elo': 555}],
+                       pending={'elo:555': {'id': 'elo:555', 'soop_id': 'x', 'race': '테란', 'tier': '5'}})
+    assert 'fills' not in out
 
 
 def test_member_without_elo_id_is_reported_not_auto_linked(monkeypatch):
