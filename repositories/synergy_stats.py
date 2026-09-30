@@ -142,19 +142,24 @@ def upsert_daily_snapshot(stat_date: str, rows: list[dict]) -> int:
     return len(rows)
 
 
-def load_daily_snapshot_rows(stat_date: str) -> list[dict]:
+DAILY_SNAPSHOT_COLUMNS = (
+    "stat_date,month_start,soop_id,elo_id,nickname,role,affiliation,"
+    "race,tier,gender,birth_date,balloons,broadcast_seconds,"
+    "cumulative_viewers,sponsor_wins,sponsor_losses,updated_at,"
+    "sponsor_updated_at"
+)
+# 스폰 승패 비교에 필요한 칸만(바뀐 날만 위의 전체 칸을 다시 받아 게시한다 - egress 절약)
+DAILY_SPONSOR_COLUMNS = "soop_id,elo_id,sponsor_wins,sponsor_losses"
+
+
+def load_daily_snapshot_rows(stat_date: str, columns: str = DAILY_SNAPSHOT_COLUMNS) -> list[dict]:
     db = get_supabase()
     rows: list[dict] = []
     start = 0
     while True:
         batch = (
             db.table("daily_member_stats")
-            .select(
-                "stat_date,month_start,soop_id,elo_id,nickname,role,affiliation,"
-                "race,tier,gender,birth_date,balloons,broadcast_seconds,"
-                "cumulative_viewers,sponsor_wins,sponsor_losses,updated_at,"
-                "sponsor_updated_at"
-            )
+            .select(columns)
             .eq("stat_date", stat_date)
             .order("soop_id")
             .range(start, start + PAGE_SIZE - 1)
@@ -361,11 +366,17 @@ def refresh_sponsor_stats(from_date: str, to_date: str) -> dict:
         month_days = by_month[ym]
         totals = _cumulative_sponsor(_paged_matches(f"{ym}-01", max(month_days)), month_days)
         for day in month_days:
+            def expected(row):
+                eid = row.get("elo_id")
+                return totals[day].get(int(eid), (0, 0)) if eid is not None else (0, 0)
+            # 먼저 승패 칸만 받아 비교하고, 바뀐 날만 전체 행을 받아 통째로 다시 게시한다
+            light = load_daily_snapshot_rows(day, DAILY_SPONSOR_COLUMNS)
+            if all((r.get("sponsor_wins"), r.get("sponsor_losses")) == expected(r) for r in light):
+                continue
             rows = load_daily_snapshot_rows(day)
             diff = 0
             for row in rows:
-                eid = row.get("elo_id")
-                w, l = totals[day].get(int(eid), (0, 0)) if eid is not None else (0, 0)
+                w, l = expected(row)
                 if (row.get("sponsor_wins"), row.get("sponsor_losses")) != (w, l):
                     row.update({"sponsor_wins": w, "sponsor_losses": l, "sponsor_updated_at": now})
                     diff += 1
