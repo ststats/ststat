@@ -42,6 +42,18 @@ def test_live_status_collects_member_posts_every_run():
     ts = Path("supabase/functions/live-status/index.ts").read_text(encoding="utf-8")
     assert "const POSTS_EVERY_MS = 90 * 1000;" in ts
     assert 'rpc("replace_member_posts"' in ts
+    # 게시판은 동시에 몇 개씩만 묻고, 모은 시각은 수집 상태 행에서 읽는다(글 행은 바뀐 것만 고친다)
+    assert "POSTS_CONCURRENCY" in ts and "posts_scanned_at" in ts
+    assert "member_posts?select=scanned_at" not in ts
+
+
+def test_member_posts_write_only_changes():
+    fn = SQL[SQL.index("create or replace function public.replace_member_posts"):]
+    fn = fn[:fn.index("$$;")]
+    # 받은 멤버의 글을 통째로 지우지 않고, 내용이 달라진 글만 고친다
+    assert "is distinct from (excluded.reg_date, excluded.total_pages, excluded.post)" in fn
+    assert "and not exists (select 1 from _mp_new n" in fn
+    assert "alter table public.live_scan_state add column if not exists posts_scanned_at timestamptz;" in SQL
 
 
 def test_live_status_matches_roster_in_db_not_by_download():

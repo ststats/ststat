@@ -1053,6 +1053,12 @@ grant select, insert, update, delete on table public.member_posts to service_rol
 
 -- 받은 멤버(p_scanned)의 글은 새것으로 바꾸고, 활동 명단(p_active)에서 빠진 멤버의 글은 지운다.
 -- 이번에 못 받은 멤버의 글은 그대로 둔다(일시 오류로 공지가 사라지지 않게). 한 트랜잭션이다.
+-- 2분마다 부르지만 글은 거의 그대로다. 예전처럼 받은 멤버의 글을 전부 지우고 다시 넣으면 매번 백여 행(본문 JSON)을
+-- 새로 쓰고 지운 행이 쌓인다. 이제 달라진 것만 쓴다: 새 글은 넣고, 내용이 바뀐 글만 고치고, 받은 멤버의 첫 쪽에서
+-- 사라진 글과 활동 명단에서 빠진 멤버의 글만 지운다. 모은 시각은 live_scan_state.posts_scanned_at에 따로 적는다
+-- (다음 수집 간격 판단용 - 글 행의 scanned_at은 그 글이 마지막으로 바뀐 시각).
+alter table public.live_scan_state add column if not exists posts_scanned_at timestamptz;
+
 create or replace function public.replace_member_posts(p_rows jsonb, p_scanned text[], p_active text[])
 returns integer
 language plpgsql
@@ -1060,20 +1066,32 @@ security definer
 set search_path = public
 as $$
 declare
-  n integer;
+  n_del integer;
+  n_up integer;
 begin
-  delete from public.member_posts
-   where lower(soop_id) = any (select lower(x) from unnest(coalesce(p_scanned, '{}')) x)
-      or not (lower(soop_id) = any (select lower(x) from unnest(coalesce(p_active, '{}')) x));
-  insert into public.member_posts (soop_id, title_no, reg_date, total_pages, post, scanned_at)
-  select r.soop_id, r.title_no, r.reg_date, coalesce(r.total_pages, 1), r.post, now()
+  create temp table _mp_new on commit drop as
+  select lower(r.soop_id) as sid, r.soop_id, r.title_no, r.reg_date, coalesce(r.total_pages, 1) as total_pages, r.post
   from jsonb_to_recordset(coalesce(p_rows, '[]'::jsonb)) as r(
     soop_id text, title_no bigint, reg_date text, total_pages integer, post jsonb)
-  where coalesce(r.soop_id, '') <> '' and r.title_no is not null
+  where coalesce(r.soop_id, '') <> '' and r.title_no is not null;
+
+  delete from public.member_posts m
+   where not (lower(m.soop_id) = any (select lower(x) from unnest(coalesce(p_active, '{}')) x))
+      or (lower(m.soop_id) = any (select lower(x) from unnest(coalesce(p_scanned, '{}')) x)
+          and not exists (select 1 from _mp_new n where n.sid = lower(m.soop_id) and n.title_no = m.title_no));
+  get diagnostics n_del = row_count;
+
+  insert into public.member_posts as m (soop_id, title_no, reg_date, total_pages, post, scanned_at)
+  select distinct on (n.soop_id, n.title_no) n.soop_id, n.title_no, n.reg_date, n.total_pages, n.post, now()
+  from _mp_new n
   on conflict (soop_id, title_no) do update
-    set reg_date = excluded.reg_date, total_pages = excluded.total_pages, post = excluded.post, scanned_at = now();
-  get diagnostics n = row_count;
-  return n;
+    set reg_date = excluded.reg_date, total_pages = excluded.total_pages, post = excluded.post, scanned_at = now()
+    where (m.reg_date, m.total_pages, m.post) is distinct from (excluded.reg_date, excluded.total_pages, excluded.post);
+  get diagnostics n_up = row_count;
+
+  insert into public.live_scan_state (id, posts_scanned_at) values (1, now())
+  on conflict (id) do update set posts_scanned_at = excluded.posts_scanned_at;
+  return n_del + n_up;
 end;
 $$;
 

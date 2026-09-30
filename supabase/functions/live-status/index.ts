@@ -225,6 +225,7 @@ async function scanWith(source: Source, first: any, tried: string[]) {
 // 어긋나도 한 번씩 건너뛰지 않게 90초로 잡는다(같은 시각 중복 실행은 try_begin_live_scan이 이미 막는다).
 const POSTS_EVERY_MS = 90 * 1000;
 const POSTS_PER_PAGE = 10;          // 사이트 fetchMemberFeed와 같은 쪽 크기(2쪽부터는 사이트가 SOOP에 직접 묻는다)
+const POSTS_CONCURRENCY = 6;        // 게시판을 동시에 묻는 수(방송 목록 수집과 같다)
 
 async function loadActiveMemberIds(): Promise<string[]> {
   const res = await fetch(
@@ -240,14 +241,15 @@ async function loadActiveMemberIds(): Promise<string[]> {
   return [...ids];
 }
 
+// 마지막으로 공지를 모은 시각(replace_member_posts가 적는다 - 글 행은 바뀐 것만 고치므로 행의 시각으로는 알 수 없다)
 async function lastPostsScanMs(): Promise<number> {
   const res = await fetch(
-    `${SUPABASE_URL}/rest/v1/member_posts?select=scanned_at&order=scanned_at.desc&limit=1`,
+    `${SUPABASE_URL}/rest/v1/live_scan_state?select=posts_scanned_at&id=eq.1`,
     { headers: DB_HEADERS },
   );
   if (!res.ok) throw new Error("공지 수집 시각 읽기 실패: " + res.status);
   const rows = await res.json();
-  return rows[0]?.scanned_at ? Date.parse(rows[0].scanned_at) : 0;
+  return rows[0]?.posts_scanned_at ? Date.parse(rows[0].posts_scanned_at) : 0;
 }
 
 // 사이트(soop.js mergeOwnPosts)와 같은 규칙: 일반글+공지 중 본인 글만, titleNo로 중복 제거.
@@ -286,7 +288,15 @@ async function refreshMemberPosts(force = false) {
   if (!force && Date.now() - (await lastPostsScanMs()) < POSTS_EVERY_MS) return { skipped: true };
   const ids = await loadActiveMemberIds();
   if (ids.length === 0) throw new Error("활동 멤버가 없습니다.");
-  const results = await Promise.all(ids.map(id => fetchBoard(id).then(r => ({ id, ...r }), () => null)));
+  // 멤버 수만큼 한꺼번에 부르지 않고 6개씩 차례로(방송 목록 수집과 같은 동시 요청 수)
+  const results: ({ id: string; posts: any[]; totalPages: number } | null)[] = new Array(ids.length).fill(null);
+  let nextIdx = 0;
+  await Promise.all(Array.from({ length: Math.min(POSTS_CONCURRENCY, ids.length) }, async () => {
+    while (nextIdx < ids.length) {
+      const i = nextIdx++;
+      results[i] = await fetchBoard(ids[i]).then(r => ({ id: ids[i], ...r }), () => null);
+    }
+  }));
   const ok = results.filter(Boolean) as { id: string; posts: any[]; totalPages: number }[];
   // 절반 넘게 못 받으면 SOOP 쪽 문제로 보고 이번엔 바꾸지 않는다(지금 있는 공지를 지키기)
   if (ok.length < ids.length / 2) throw new Error(`게시판 ${ids.length}명 중 ${ids.length - ok.length}명을 받지 못했습니다.`);
@@ -294,7 +304,7 @@ async function refreshMemberPosts(force = false) {
     soop_id: r.id, title_no: post.titleNo, reg_date: post.regDate, total_pages: r.totalPages, post,
   })));
   const saved = await rpc("replace_member_posts", { p_rows: rows, p_scanned: ok.map(r => r.id), p_active: ids });
-  return { members: ids.length, fetched: ok.length, posts: saved };
+  return { members: ids.length, fetched: ok.length, changed: saved };
 }
 
 function json(body: unknown, status = 200) {
