@@ -242,3 +242,39 @@ def test_run_job_closes_stale_running_rows_of_the_same_job():
     run_job.close_stale_runs(db, 'sync_eloboard')
     status = {r['id']: r['status'] for r in db.tables['sync_jobs']}
     assert status == {1: 'failed', 2: 'running', 3: 'running'}
+
+
+def test_match_load_splits_range_on_statement_timeout(monkeypatch):
+    import repositories.derived_stats as repo
+    calls = []
+
+    class Q:
+        def __init__(self, params): self.params = params
+        def execute(self):
+            a, b = self.params['p_after'], self.params['p_upto']
+            calls.append((a, b))
+            if b - a > 50:   # 큰 구간은 시간 초과
+                raise Exception("{'message': 'canceling statement due to statement timeout', 'code': '57014'}")
+            return type('R', (), {'data': [[i, '2026-09-01', 1, 2, None, 0] for i in range(a + 1, b + 1)]})()
+
+    class C:
+        def rpc(self, fn, params): return Q(params)
+
+    monkeypatch.setattr(repo, '_thread_client', lambda: C())
+    monkeypatch.setattr(repo.time, 'sleep', lambda s: None)
+    rows = repo._load_match_range_compact(0, 200)
+    assert [r['elo_match_id'] for r in rows] == list(range(1, 201))
+    assert calls[0] == (0, 200) and len(calls) > 1
+
+
+def test_match_load_other_errors_are_not_swallowed(monkeypatch):
+    import repositories.derived_stats as repo
+
+    class C:
+        def rpc(self, fn, params):
+            raise Exception("permission denied")
+
+    monkeypatch.setattr(repo, '_thread_client', lambda: C())
+    import pytest
+    with pytest.raises(Exception, match='permission denied'):
+        repo._load_match_range_compact(0, 200)

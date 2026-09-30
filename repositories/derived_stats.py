@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -77,9 +78,21 @@ def _load_match_range(after: int, upto: int) -> list[dict]:
         after = rows[-1]['elo_match_id']
 
 
-def _load_match_range_compact(after: int, upto: int) -> list[dict]:
-    """(after, upto] 구간을 elo_matches_compact(ststat.sql 4절)로 한 번에 읽는다(1000행 제한 없음)."""
-    data = _thread_client().rpc('elo_matches_compact', {'p_after': after, 'p_upto': upto}).execute().data
+def _is_timeout(exc: Exception) -> bool:
+    return '57014' in str(exc) or 'statement timeout' in str(exc)
+
+
+def _load_match_range_compact(after: int, upto: int, depth: int = 0) -> list[dict]:
+    """(after, upto] 구간을 elo_matches_compact(ststat.sql 4절)로 한 번에 읽는다(1000행 제한 없음).
+    DB가 잠깐 느려 시간 초과가 나면 구간을 반으로 나눠 다시 읽는다(작은 구간은 금방 끝난다). 4번 나눠도 안 되면 포기."""
+    try:
+        data = _thread_client().rpc('elo_matches_compact', {'p_after': after, 'p_upto': upto}).execute().data
+    except Exception as exc:
+        if not _is_timeout(exc) or depth >= 4 or upto - after < 2:
+            raise
+        time.sleep(1 + depth)
+        mid = (after + upto) // 2
+        return _load_match_range_compact(after, mid, depth + 1) + _load_match_range_compact(mid, upto, depth + 1)
     return [dict(zip(MATCH_KEYS, row)) for row in data or []]
 
 
@@ -132,11 +145,16 @@ def _load_matches_once() -> list[dict]:
 
 def load_matches() -> list[dict]:
     last_error = None
-    for _ in range(LOAD_ATTEMPTS):
+    for attempt in range(LOAD_ATTEMPTS):
         try:
             return _load_matches_once()
         except RuntimeError as exc:
             last_error = exc
+        except Exception as exc:   # DB 시간 초과 등 일시 오류(2026-09-30 한 번 실패): 조금 쉬었다 다시
+            if not _is_timeout(exc):
+                raise
+            last_error = exc
+            time.sleep(5 * (attempt + 1))
     raise last_error
 
 
