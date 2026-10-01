@@ -668,8 +668,9 @@ select
   p.name as elo_name,
   coalesce(nullif(tm.race,''), p.race, '') as race,
   tm.nickname,
-  -- 휴면 선수는 상대전적·분석에 이름·티어로는 나오지만 SOOP ID는 공개하지 않는다(운영 결정 2026-09-27)
-  case when tm.affiliation = '휴면' then null else tm.soop_id end as soop_id,
+  -- 휴면 선수도 상대전적·분석 검색 화면에 나오므로 프로필 사진(주소에 SOOP ID가 들어간다)에 쓸 SOOP ID를 준다
+  -- (운영 결정 2026-10-01: 화면에 안 나오면 가리고, 검색으로 화면에 나오면 보인다)
+  tm.soop_id,
   tm.tier,
   tm.affiliation,
   ps.total_games,
