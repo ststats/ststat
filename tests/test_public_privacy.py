@@ -10,9 +10,10 @@ def _block(start: str, end: str) -> str:
     return SQL[a:SQL.index(end, a)]
 
 
-def test_public_player_view_hides_dormant_soop_id():
+def test_public_player_view_gives_dormant_soop_id_for_search_photo():
+    """휴면 선수도 상대전적·분석 검색 화면에 나오므로 프로필 사진용 SOOP ID를 준다(운영 결정 2026-10-01)."""
     view = _block("create or replace view public.elo_public_players", ";")
-    assert re.search(r"case when tm\.affiliation = '휴면' then null else tm\.soop_id end as soop_id", view)
+    assert "tm.soop_id," in view and "then null else tm.soop_id" not in view
 
 
 def test_daily_stats_public_read_skips_dormant_rows():
