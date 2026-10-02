@@ -123,3 +123,12 @@ def test_player_specific_reads_go_through_functions():
         assert f"grant execute on function public.{fn} to anon, authenticated;" in SQL
     view = SQL.split("create view public.daily_member_stats_latest", 1)[1].split(";", 1)[0]
     assert "birth_date" not in view and "race" not in view
+
+
+def test_race_is_normalized_where_ststat_writes_it():
+    """EloBoard 선수·일별 통계·대기 명단 종족은 staruniv.sql의 normalize_race로 맞춘다(T와 테란이 섞이지 않게).
+    upsert_elo_batch는 맞춘 값으로 비교해야 매번 모든 선수를 다시 쓰지 않는다."""
+    batch = _block("create or replace function public.upsert_elo_batch", "$$;")
+    assert "public.normalize_race(r.race)" in batch
+    assert "public.normalize_race(x.race)" in SQL and "public.normalize_tier(x.tier)" in SQL
+    assert "create trigger tier_member_candidates_normalize_race" in SQL
