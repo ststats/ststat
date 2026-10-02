@@ -130,5 +130,5 @@ def test_race_is_normalized_where_ststat_writes_it():
     upsert_elo_batch는 맞춘 값으로 비교해야 매번 모든 선수를 다시 쓰지 않는다."""
     batch = _block("create or replace function public.upsert_elo_batch", "$$;")
     assert "public.normalize_race(r.race)" in batch
-    assert "public.normalize_race(x.race)" in SQL
+    assert "public.normalize_race(x.race)" in SQL and "public.normalize_tier(x.tier)" in SQL
     assert "create trigger tier_member_candidates_normalize_race" in SQL

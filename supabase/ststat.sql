@@ -617,7 +617,7 @@ begin
   )
   select
     x.stat_date, x.month_start, x.soop_id, x.elo_id, x.nickname,
-    coalesce(x.role, ''), x.affiliation, public.normalize_race(x.race), x.tier, x.gender,
+    coalesce(x.role, ''), x.affiliation, public.normalize_race(x.race), public.normalize_tier(x.tier), x.gender,
     x.birth_date, coalesce(x.balloons, 0),
     coalesce(x.broadcast_seconds, 0), coalesce(x.cumulative_viewers, 0),
     coalesce(x.sponsor_wins, 0), coalesce(x.sponsor_losses, 0),
@@ -1241,9 +1241,9 @@ grant execute on function public.elo_players_list(boolean), public.elo_player_ma
 
 
 -- ############################################################################
--- 종족 표기 통일('테란' / '저그' / '프로토스') - 함수 normalize_race는 staruniv.sql 11번
+-- 종족·티어 표기 통일 - 함수 normalize_race·normalize_tier는 staruniv.sql 11·12번
 -- ############################################################################
--- 신규 인원 대기 명단: 경기 기록에서 올라온 줄은 T/Z/P, 티어 목록에서 올라온 줄은 '테란'이었다.
+-- 신규 인원 대기 명단: 경기 기록에서 올라온 줄은 T/Z/P, 티어 목록에서 올라온 줄은 '테란'이었다(티어도 같이 맞춘다).
 create or replace function public.normalize_candidate_race()
 returns trigger
 language plpgsql
@@ -1251,15 +1251,16 @@ set search_path = public
 as $$
 begin
   new.race := public.normalize_race(new.race);
+  new.tier := public.normalize_tier(new.tier);
   return new;
 end;
 $$;
 drop trigger if exists tier_member_candidates_normalize_race on public.tier_member_candidates;
-create trigger tier_member_candidates_normalize_race before insert or update of race on public.tier_member_candidates
+create trigger tier_member_candidates_normalize_race before insert or update of race, tier on public.tier_member_candidates
   for each row execute function public.normalize_candidate_race();
 
 -- 처음 한 번 기존 값 맞추기(방송통계 일별 기록은 그날의 티어표 종족을 옮겨 둔 것)
-update public.tier_member_candidates set race = public.normalize_race(race)
- where race is distinct from public.normalize_race(race);
-update public.daily_member_stats set race = public.normalize_race(race)
- where race is distinct from public.normalize_race(race);
+update public.tier_member_candidates set race = public.normalize_race(race), tier = public.normalize_tier(tier)
+ where race is distinct from public.normalize_race(race) or tier is distinct from public.normalize_tier(tier);
+update public.daily_member_stats set race = public.normalize_race(race), tier = public.normalize_tier(tier)
+ where race is distinct from public.normalize_race(race) or tier is distinct from public.normalize_tier(tier);
