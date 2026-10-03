@@ -1167,13 +1167,8 @@ revoke all on public.elo_derived_snapshots, public.elo_player_stats,
   public.poonggo_monthly_stats, public.synergy_month_confirmations, public.live_broadcasts, public.live_broadcasts_current, public.live_scan_state, public.member_posts,
   public.rounds_effective, public.sync_jobs from anon;
 
--- 티어표 상대전적·분석·엔트리(page-h2h.js, page-analysis.js, page-entry.js)
-grant select (elo_id,elo_name,race,nickname,soop_id,tier,affiliation,total_games,tier_rank,tier_count,as_of) on public.elo_public_players to anon;
-grant select (match_date,elo_id,opponent_elo_id,won,map_id,map_name,category_name) on public.elo_public_matches to anon;
-grant select (elo_id,raw_rating,rating,tier,tier_rank,as_of) on public.elo_rankings to anon;
-grant select (elo_id,rating,rating_se) on public.elo_player_ratings to anon;
--- 그 밖의 표(랭킹 기준선·레이팅 기록·방송통계·방송·공지)는 anon이 읽지 않는다: 두 사이트는 아래 공개 읽기
--- 함수(api_*·player_*)만 부른다. 각 표의 anon 정책은 함수가 따르는 공개 범위의 기준으로 남겨 둔다.
+-- anon은 위 표·뷰를 하나도 읽지 않는다(열 권한도 주지 않는다): 두 사이트는 아래 공개 읽기 함수(api_*·player_*·
+-- elo_*_list)만 부른다. 각 표의 anon 정책은 함수가 따르는 공개 범위의 기준으로 남겨 둔다.
 
 -- 대학 로고: 어느 화면에든 나오는 대학만(전적 상대팀, 티어표 소속, 시너지 날짜별 대학). 표는 staruniv.sql 7번.
 create index if not exists daily_member_stats_affiliation_idx on public.daily_member_stats (affiliation);
@@ -1304,9 +1299,11 @@ grant execute on function public.api_university_logos(jsonb), public.api_daily_s
 
 -- 긴 목록은 한 번에: 상대전적·분석·엔트리가 1000줄씩 여러 번 나눠 받던 목록을 요청 한 번으로 돌려준다.
 -- 결과는 {"c": [열 이름], "r": [[값, …], …]} (열 이름을 줄마다 반복하지 않아 작다). StarUniv api.js가 객체 배열로 바꾼다.
--- security invoker라 부른 사람(anon)의 권한 그대로 읽는다 - 위 열 권한·행 정책을 넘지 않는다. 열을 바꾸면 위 grant도 같이 본다.
+-- security definer라 anon은 표·뷰를 직접 읽지 못하고 이 함수로만 받는다(위 공개 읽기 함수와 같다). 표 정책을 거치지
+-- 않으므로 정책의 거르기를 그대로 적는다: 랭킹·레이팅은 활성 스냅샷만. 선수·경기 뷰(elo_public_*)는 원래 뷰 소유자
+-- 권한으로 돌아 정의에 거르기가 들어 있다(활성 스냅샷, 휴면 선수도 검색에 나온다 - 운영 결정 2026-10-01).
 create or replace function public.elo_players_list(p_ranked boolean default false) returns json
-language sql stable security invoker set search_path = public as $$
+language sql stable security definer set search_path = public as $$
   select json_build_object(
     'c', case when p_ranked
       then json_build_array('elo_id','elo_name','race','nickname','soop_id','tier','affiliation','total_games','tier_rank','tier_count','as_of')
@@ -1317,25 +1314,25 @@ language sql stable security invoker set search_path = public as $$
       from public.elo_public_players), '[]'::json));
 $$;
 create or replace function public.elo_player_match_list(p_elo_id integer, p_since date default null) returns json
-language sql stable security invoker set search_path = public as $$
+language sql stable security definer set search_path = public as $$
   select json_build_object(
     'c', json_build_array('match_date','opponent_elo_id','won','map_id','map_name','category_name'),
     'r', coalesce((select json_agg(json_build_array(match_date,opponent_elo_id,won,map_id,map_name,category_name) order by match_date desc)
       from public.elo_public_matches where elo_id = p_elo_id and (p_since is null or match_date >= p_since)), '[]'::json));
 $$;
 create or replace function public.elo_rankings_list() returns json
-language sql stable security invoker set search_path = public as $$
+language sql stable security definer set search_path = public as $$
   select json_build_object(
     'c', json_build_array('elo_id','raw_rating','rating','tier','tier_rank','as_of'),
     'r', coalesce((select json_agg(json_build_array(elo_id,raw_rating,rating,tier,tier_rank,as_of) order by elo_id)
-      from public.elo_rankings), '[]'::json));
+      from public.elo_rankings where snapshot_id = (select public.active_elo_snapshot_id())), '[]'::json));
 $$;
 create or replace function public.elo_player_ratings_list() returns json
-language sql stable security invoker set search_path = public as $$
+language sql stable security definer set search_path = public as $$
   select json_build_object(
     'c', json_build_array('elo_id','rating','rating_se'),
     'r', coalesce((select json_agg(json_build_array(elo_id,rating,rating_se) order by elo_id)
-      from public.elo_player_ratings), '[]'::json));
+      from public.elo_player_ratings where snapshot_id = (select public.active_elo_snapshot_id())), '[]'::json));
 $$;
 revoke all on function public.elo_players_list(boolean), public.elo_player_match_list(integer, date),
   public.elo_rankings_list(), public.elo_player_ratings_list() from public;

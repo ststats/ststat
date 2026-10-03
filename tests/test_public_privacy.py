@@ -67,8 +67,8 @@ def test_live_status_matches_roster_in_db_not_by_download():
     assert "grant execute on function public.live_roster_match(text[]) to service_role;" in SQL
 
 
-def test_anon_gets_only_the_columns_pages_read():
-    """익명 조회는 14번 한 곳에서 열 단위로만 준다(화면에 나오는 것만)."""
+def test_anon_reads_no_table_or_view():
+    """익명(anon)은 표·뷰를 하나도 직접 읽지 않는다 - 14번에서 전부 회수하고, 공개 읽기 함수로만 받는다."""
     head, contract = SQL.split("-- 14. 익명(anon) 공개 범위", 1)
     # 앞 절들은 anon에게 표·뷰 전체를 주지 않는다
     assert not re.search(r"grant select on (table )?public\.[\w, .]+ to anon", head)
@@ -76,30 +76,35 @@ def test_anon_gets_only_the_columns_pages_read():
     # 표 이름을 키로 모은다(열 목록이 같은 표가 둘이어도 겹치지 않게)
     grants = {table: set(cols.split(",")) for cols, table in
               re.findall(r"grant select \(([^)]+)\) on public\.(\w+) to anon;", contract.replace("\n  ", ""))}
-    assert grants["elo_rankings"] == {"elo_id", "raw_rating", "rating", "tier", "tier_rank", "as_of"}
-    # 방송통계·방송·공지·랭킹 기준선·레이팅 기록은 표를 열지 않는다 - 공개 읽기 함수(api_*·player_*)로만
+    assert grants == {}
+    assert not re.search(r"grant select[^;]* to anon", SQL)
     for fn_only in ("daily_member_stats", "daily_member_stats_latest", "synergy_daily_dates", "live_broadcasts",
-                    "live_broadcasts_current", "member_posts", "elo_ranking_meta", "elo_rating_history"):
+                    "live_broadcasts_current", "member_posts", "elo_ranking_meta", "elo_rating_history",
+                    "elo_public_players", "elo_public_matches", "elo_rankings", "elo_player_ratings"):
         assert fn_only not in grants, fn_only
         assert f"public.{fn_only}" in contract.split("from anon;", 1)[0], fn_only
     assert re.search(r"create view public\.daily_member_stats_latest\s+with \(security_invoker = true\)", head)
     # 대학 로고는 어느 화면에든 나오는 대학만
     assert "create policy university_logos_anon_read on public.university_logos for select to anon using (public.university_logo_shown(name));" in contract
-    # 선수 목록은 검색·요약 카드에 나오는 열만(승수·마지막 경기일은 화면에 없다)
-    assert not {"wins", "last_match_date"} & grants["elo_public_players"]
-    for hidden in ("elo_player_matches", "elo_player_stats", "elo_matches", "rounds_effective"):
-        assert hidden not in grants
+    # 선수 목록 함수는 검색·요약 카드에 나오는 열만(승수·마지막 경기일은 화면에 없다)
+    fn = SQL.split("create or replace function public.elo_players_list", 1)[1].split("$$;", 1)[0]
+    assert "wins" not in fn and "last_match_date" not in fn
 
 
-def test_list_functions_read_as_the_caller_and_only_granted_views():
-    """긴 목록 함수는 anon 권한 그대로 읽는다(security invoker) - 열 권한·행 정책을 넘지 않는다."""
+def test_elo_list_functions_are_the_only_way_to_read_elo():
+    """ELO 긴 목록 함수는 정의자 권한(anon은 표·뷰를 못 읽는다)이라 표 정책의 거르기(활성 스냅샷)를 함수에 적는다."""
     sql = SQL
     for name in ('elo_players_list', 'elo_player_match_list', 'elo_rankings_list', 'elo_player_ratings_list'):
         body = re.search(rf"create or replace function public\.{name}\(.*?\$\$(.*?)\$\$;", sql, re.S)
         assert body, name
         header = sql[body.start():body.start(1)]
-        assert 'security invoker' in header and 'security definer' not in header, name
+        assert 'security definer set search_path = public' in header and 'security invoker' not in header, name
         assert re.search(rf"grant execute on function .*public\.{name}\(", sql, re.S), name
+        if name in ('elo_rankings_list', 'elo_player_ratings_list'):
+            assert "where snapshot_id = (select public.active_elo_snapshot_id())" in body.group(1), name
+    # 선수·경기 뷰는 소유자 권한 뷰라 정의 안에서 활성 스냅샷만 고른다
+    view = SQL.split("create or replace view public.elo_public_players", 1)[1].split(";", 1)[0]
+    assert "join public.elo_derived_snapshots s on s.status='active'" in view
 
 
 def test_live_status_rejects_malformed_first_page():
