@@ -1199,6 +1199,98 @@ grant execute on function public.university_logo_shown(text) to anon, authentica
 drop policy if exists university_logos_anon_read on public.university_logos;
 create policy university_logos_anon_read on public.university_logos for select to anon using (public.university_logo_shown(name));
 
+-- 공개 읽기 함수(/api/v1): StarUniv 공개 페이지(api.js)는 아래 표 대신 이 함수들만 부른다. 함수 하나가 주소
+-- 하나(staruniv api/openapi.yaml)에 대응하고, 화면이 그리는 열만 JSON으로 돌려준다(행 수 제한 없이 요청 한 번).
+-- security definer라 표 정책을 거치지 않으므로, 거르는 조건은 각 표의 anon 정책과 똑같이 여기에 적는다
+-- (방송·통계 날짜는 휴면 제외, ELO는 활성 스냅샷만, 로고는 화면에 나오는 대학만). StarUniv 기본 표는 staruniv.sql 2번.
+-- 시너지가 아직 위 열 권한으로 표를 직접 읽으므로(방송·통계·로고), 그 권한은 시너지를 옮길 때까지 둔다.
+create or replace function public.api_university_logos(p_names jsonb) returns json
+language sql stable security definer set search_path = public as $$
+  select coalesce(json_agg(json_build_object('name', l.name, 'path', l.path)), '[]'::json)
+  from public.university_logos l
+  where l.name in (select jsonb_array_elements_text(case when jsonb_typeof(p_names) = 'array' then p_names else '[]'::jsonb end))
+    and public.university_logo_shown(l.name);
+$$;
+
+-- 지금 방송 중(5분 안에 확인된 방송)인 선수 중 사이트에 나오는 선수(휴면 아님)만
+create or replace function public.api_live() returns json
+language sql stable security definer set search_path = public as $$
+  select coalesce(json_agg(json_build_object('soop_id', b.soop_id, 'broad_no', b.broad_no, 'broad_title', b.broad_title,
+      'current_sum_viewer', b.current_sum_viewer, 'broad_start', b.broad_start, 'category_name', b.category_name,
+      'broad_cate_no', b.broad_cate_no)), '[]'::json)
+  from public.live_broadcasts b
+  where b.scanned_at > now() - interval '5 minutes'
+    and exists (select 1 from public.tier_members tm
+                where tm.soop_id = b.soop_id and coalesce(tm.affiliation, '') <> '휴면');
+$$;
+
+-- LIVE 점만 찍는 화면: 같은 범위의 SOOP ID만
+create or replace function public.api_live_ids() returns json
+language sql stable security definer set search_path = public as $$
+  select coalesce(json_agg(json_build_object('soop_id', b.soop_id)), '[]'::json)
+  from public.live_broadcasts b
+  where b.scanned_at > now() - interval '5 minutes'
+    and exists (select 1 from public.tier_members tm
+                where tm.soop_id = b.soop_id and coalesce(tm.affiliation, '') <> '휴면');
+$$;
+
+-- 방송통계가 있는 날짜(최신순). anon이 보는 행(휴면 제외)이 있는 날만 - synergy_daily_dates와 같다
+create or replace function public.api_stats_dates() returns json
+language sql stable security definer set search_path = public as $$
+  select coalesce(json_agg(json_build_object('stat_date', d.stat_date) order by d.stat_date desc), '[]'::json)
+  from (select distinct stat_date from public.daily_member_stats where coalesce(affiliation, '') <> '휴면') d;
+$$;
+
+-- 멤버 공지 모음(최신순 2000개)
+create or replace function public.api_member_posts() returns json
+language sql stable security definer set search_path = public as $$
+  select coalesce(json_agg(json_build_object('soop_id', p.soop_id, 'total_pages', p.total_pages, 'post', p.post)
+      order by p.reg_date desc), '[]'::json)
+  from (select * from public.member_posts order by reg_date desc limit 2000) p;
+$$;
+
+-- 홈 공지 카드: 최신 p_limit개(최대 50)의 제목·본문 글자·시각·첫 사진만
+create or replace function public.api_recent_posts(p_limit integer default 6) returns json
+language sql stable security definer set search_path = public as $$
+  select coalesce(json_agg(json_build_object('soop_id', p.soop_id, 'titleName', p.post->>'titleName',
+      'regDate', p.post->>'regDate', 'text', p.post->'content'->>'textContent', 'thumb', p.post->'photos'->0->>'url')
+      order by p.reg_date desc), '[]'::json)
+  from (select * from public.member_posts order by reg_date desc
+        limit least(greatest(coalesce(p_limit, 6), 1), 50)) p;
+$$;
+
+-- ELO 레이팅 기록이 있는 첫 달·마지막 달(활성 스냅샷)
+create or replace function public.api_elo_rating_range() returns json
+language sql stable security definer set search_path = public as $$
+  select json_build_object('first', coalesce(min(month_end)::text, ''), 'last', coalesce(max(month_end)::text, ''))
+  from public.elo_rating_history where snapshot_id = (select public.active_elo_snapshot_id());
+$$;
+
+-- 한 선수의 월말 레이팅(활성 스냅샷)
+create or replace function public.api_elo_rating_history(p_elo_id integer) returns json
+language sql stable security definer set search_path = public as $$
+  select coalesce(json_agg(json_build_object('month_end', h.month_end, 'rating', h.rating) order by h.month_end), '[]'::json)
+  from (select month_end, rating from public.elo_rating_history
+        where snapshot_id = (select public.active_elo_snapshot_id()) and elo_id = p_elo_id
+        order by month_end limit 1000) h;
+$$;
+
+-- 가장 최근 랭킹의 티어 기준선·종족 상성(활성 스냅샷, 없으면 {})
+create or replace function public.api_elo_ranking_meta() returns json
+language sql stable security definer set search_path = public as $$
+  select coalesce((select json_build_object('as_of', as_of, 'tier_counts', tier_counts, 'tier_levels', tier_levels,
+      'race_matchup', race_matchup)
+    from public.elo_ranking_meta where snapshot_id = (select public.active_elo_snapshot_id())
+    order by as_of desc limit 1), '{}'::json);
+$$;
+
+revoke all on function public.api_university_logos(jsonb), public.api_live(), public.api_live_ids(),
+  public.api_stats_dates(), public.api_member_posts(), public.api_recent_posts(integer),
+  public.api_elo_rating_range(), public.api_elo_rating_history(integer), public.api_elo_ranking_meta() from public;
+grant execute on function public.api_university_logos(jsonb), public.api_live(), public.api_live_ids(),
+  public.api_stats_dates(), public.api_member_posts(), public.api_recent_posts(integer),
+  public.api_elo_rating_range(), public.api_elo_rating_history(integer), public.api_elo_ranking_meta() to anon, authenticated;
+
 -- 긴 목록은 한 번에: 상대전적·분석·엔트리가 1000줄씩 여러 번 나눠 받던 목록을 요청 한 번으로 돌려준다.
 -- 결과는 {"c": [열 이름], "r": [[값, …], …]} (열 이름을 줄마다 반복하지 않아 작다). StarUniv api.js가 객체 배열로 바꾼다.
 -- security invoker라 부른 사람(anon)의 권한 그대로 읽는다 - 위 열 권한·행 정책을 넘지 않는다. 열을 바꾸면 위 grant도 같이 본다.

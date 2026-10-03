@@ -132,3 +132,24 @@ def test_race_is_normalized_where_ststat_writes_it():
     assert "public.normalize_race(r.race)" in batch
     assert "public.normalize_race(x.race)" in SQL and "public.normalize_tier(x.tier)" in SQL
     assert "create trigger tier_member_candidates_normalize_race" in SQL
+
+
+def test_public_api_functions_keep_the_same_filters_as_table_policies():
+    """StarUniv 공개 페이지가 부르는 읽기 함수(api_*): 정의자 권한이라 표 정책 대신 같은 거르기를 함수에 적는다."""
+    block = _block("-- 공개 읽기 함수(/api/v1): StarUniv", "to anon, authenticated;")
+    names = re.findall(r"create or replace function public\.(api_\w+)\(", block)
+    assert set(names) == {"api_university_logos", "api_live", "api_live_ids", "api_stats_dates", "api_member_posts",
+                          "api_recent_posts", "api_elo_rating_range", "api_elo_rating_history", "api_elo_ranking_meta"}
+    assert block.count("security definer set search_path = public") == len(names)
+    grant = block[block.index("grant execute on function"):]
+    for name in names:
+        assert f"public.{name}(" in grant
+    # 방송은 5분 안·사이트에 나오는 선수(휴면 아님)만, 통계 날짜는 휴면 행을 빼고, ELO는 활성 스냅샷만, 로고는 화면에 나오는 대학만
+    assert block.count("b.scanned_at > now() - interval '5 minutes'") == 2
+    assert block.count("coalesce(tm.affiliation, '') <> '휴면'") == 2
+    assert "from public.daily_member_stats where coalesce(affiliation, '') <> '휴면'" in block
+    assert block.count("snapshot_id = (select public.active_elo_snapshot_id())") == 3
+    assert "and public.university_logo_shown(l.name)" in block
+    # 홈 카드 최근 글은 카드 칸만, 개수는 1~50
+    assert "'thumb', p.post->'photos'->0->>'url'" in block
+    assert "limit least(greatest(coalesce(p_limit, 6), 1), 50)" in block
