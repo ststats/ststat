@@ -76,20 +76,15 @@ def test_anon_gets_only_the_columns_pages_read():
     # 표 이름을 키로 모은다(열 목록이 같은 표가 둘이어도 겹치지 않게)
     grants = {table: set(cols.split(",")) for cols, table in
               re.findall(r"grant select \(([^)]+)\) on public\.(\w+) to anon;", contract.replace("\n  ", ""))}
-    assert "month_start" not in grants["daily_member_stats"]
-    assert grants["synergy_daily_dates"] == {"stat_date"}
     assert grants["elo_rankings"] == {"elo_id", "raw_rating", "rating", "tier", "tier_rank", "as_of"}
-    assert "elo_id" not in grants["daily_member_stats"]
-    # 최신 날짜 뷰는 원본 표와 같은 열만, 부르는 쪽 권한(휴면 제외 정책)으로 읽는다
-    assert grants["daily_member_stats_latest"] == grants["daily_member_stats"]
-    # 목록(대학 카드)에는 생년월일·종족이 안 보인다: 🎂용 생일 달만. 프로필은 player_profile_stats로
-    assert {"birth_date", "race"}.isdisjoint(grants["daily_member_stats"])
-    assert "birth_month" in grants["daily_member_stats"]
-    assert "public.daily_member_stats_latest" in contract.split("from anon;", 1)[0]
+    # 방송통계·방송·공지·랭킹 기준선·레이팅 기록은 표를 열지 않는다 - 공개 읽기 함수(api_*·player_*)로만
+    for fn_only in ("daily_member_stats", "daily_member_stats_latest", "synergy_daily_dates", "live_broadcasts",
+                    "live_broadcasts_current", "member_posts", "elo_ranking_meta", "elo_rating_history"):
+        assert fn_only not in grants, fn_only
+        assert f"public.{fn_only}" in contract.split("from anon;", 1)[0], fn_only
     assert re.search(r"create view public\.daily_member_stats_latest\s+with \(security_invoker = true\)", head)
     # 대학 로고는 어느 화면에든 나오는 대학만
     assert "create policy university_logos_anon_read on public.university_logos for select to anon using (public.university_logo_shown(name));" in contract
-    assert "scanned_at" not in grants["live_broadcasts_current"]
     # 선수 목록은 검색·요약 카드에 나오는 열만(승수·마지막 경기일은 화면에 없다)
     assert not {"wins", "last_match_date"} & grants["elo_public_players"]
     for hidden in ("elo_player_matches", "elo_player_stats", "elo_matches", "rounds_effective"):
@@ -138,7 +133,7 @@ def test_public_api_functions_keep_the_same_filters_as_table_policies():
     """StarUniv 공개 페이지가 부르는 읽기 함수(api_*): 정의자 권한이라 표 정책 대신 같은 거르기를 함수에 적는다."""
     block = _block("-- 공개 읽기 함수(/api/v1): StarUniv", "to anon, authenticated;")
     names = re.findall(r"create or replace function public\.(api_\w+)\(", block)
-    assert set(names) == {"api_university_logos", "api_live", "api_live_ids", "api_stats_dates", "api_member_posts",
+    assert set(names) == {"api_university_logos", "api_daily_stats", "api_live", "api_live_ids", "api_stats_dates", "api_member_posts",
                           "api_recent_posts", "api_elo_rating_range", "api_elo_rating_history", "api_elo_ranking_meta"}
     assert block.count("security definer set search_path = public") == len(names)
     grant = block[block.index("grant execute on function"):]
@@ -153,3 +148,14 @@ def test_public_api_functions_keep_the_same_filters_as_table_policies():
     # 홈 카드 최근 글은 카드 칸만, 개수는 1~50
     assert "'thumb', p.post->'photos'->0->>'url'" in block
     assert "limit least(greatest(coalesce(p_limit, 6), 1), 50)" in block
+
+
+def test_synergy_daily_list_function_gives_only_list_columns():
+    """시너지 목록(api_daily_stats): 휴면 제외, 생일은 달만(생년월일·종족 없음), 지난달 순위용(light)은 지표 칸만."""
+    fn = _block("create or replace function public.api_daily_stats", "$$;")
+    assert "birth_month" in fn and "birth_date" not in fn and "'race'" not in fn
+    assert fn.count("coalesce(affiliation, '') <> '휴면'") + fn.count("coalesce(s.affiliation, '') <> '휴면'") == 2
+    light = fn[fn.index("then json_build_object("):fn.index("else json_build_object(")]
+    keys = set(re.findall(r"'(\w+)', s\.", light))
+    assert keys == {"role", "affiliation", "gender", "balloons", "broadcast_seconds", "cumulative_viewers",
+                    "sponsor_wins", "sponsor_losses"}
