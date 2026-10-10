@@ -1,0 +1,178 @@
+realtime:
+  owner: ststat
+  executor: supabase_edge_function   # supabase/functions/live-status, pg_cron이 부름(supabase/ststat.sql 12번)
+  cadence: "2 minutes"
+  owns_tables:
+    - live_broadcasts
+    - live_scan_state
+    - member_posts      # 캄몬 멤버 SOOP 게시판 첫 쪽
+  owns:
+    - live broadcast status
+    - realtime viewer count
+    - current broadcast metadata
+    - realtime checked timestamps
+
+# 정기 실행: cron-job.org → workflow_dispatch(pipeline.yml), 매일 03:50부터 4시간마다(KST).
+roster:
+  owner: ststat
+  executor: external_cron_to_github_actions
+  cadence: "4 hours"
+  source: eloboard_tier_api
+  # 명단 선수는 고치지 않고 새 선수만 후보로 넣는다. 명단 관리는 어드민이 한다.
+  existing_tier_members_auto_columns: []
+  candidate_table: tier_member_candidates
+  protected_manual_columns:
+    - nickname
+    - soop_id
+    - elo_id
+    - birth_date
+    - gender
+    - race
+    - tier
+    - affiliation
+    - role
+    - modified_at
+    - history
+    - started_on
+  notes:
+    - "modified_at is cleared conditionally only when the exact backfill marker still matches."
+
+eloboard:
+  owner: ststat
+  executor: external_cron_to_github_actions
+  cadence: "4 hours"
+  source: "https://eloboard.co.kr/api/matches"
+  owns_tables:
+    - elo_categories
+    - elo_maps
+    - elo_players
+    - elo_matches
+  behavior:
+    - "Each run re-reads from the 1st of this month (1st-7th: from the 1st of last month); matches missing twice in a row inside that window are deleted (max 2% / 50)."
+    - "Partial/failed fetches never write matches or delete existing rows."
+    - "Unknown elo_ids are staged in tier_member_candidates and never auto-added to tier_members."
+
+staruniv_admin:
+  owner: staruniv_admin
+  owns:
+    - calendar
+    - off-air schedule
+    - history
+    - external tools
+    - manual video picks
+    - manually managed roster fields
+    - team and member manual overrides
+
+rules:
+  - "Batch jobs must never overwrite realtime broadcast fields."
+  - "Realtime worker must never overwrite batch-derived statistics."
+  - "Roster sync may update only explicitly auto-owned tier_members columns."
+  - "EloBoard sync may write only elo_* source tables and candidate staging."
+  - "New players must never be auto-inserted into tier_members."
+
+derived_eloboard_stats:
+  owner: ststat
+  executor: external_cron_to_github_actions
+  cadence: "after sync_eloboard (normally every 4 hours)"
+  source_tables:
+    - elo_matches
+    - elo_players
+    - elo_maps
+    - elo_categories
+    - tier_members
+  owns_tables:
+    - elo_derived_snapshots
+    - elo_player_stats
+    - elo_rankings
+    - elo_ranking_meta
+    - elo_player_ratings
+    - elo_rating_history
+  rules:
+    - "Derived stats are written as a new snapshot and activated only after the full calculation succeeds."
+    - "This job never updates tier_members or realtime broadcast fields."
+
+synergy_daily_stats:
+  owner: ststat
+  executor: external_cron_to_github_actions
+  cadence: "after sync_eloboard, in parallel with calculate_eloboard_stats (normally every 4 hours)"
+  external_source:
+    - trackify_ranking_summary   # 기본: 별풍선·방송시간·누적시청자·뷰어십, 아이디 100개씩
+    - poonggo_monthly_api        # 예비(MONTHLY_SOURCE=poonggo): 뷰어십 없음
+  source_tables:
+    - tier_members
+    - elo_matches
+  owns_tables:
+    - poonggo_monthly_stats
+    - daily_member_stats
+    - synergy_month_confirmations
+  protected_behavior:
+    - "Sponsor stats are calculated from the centralized elo_matches table; EloBoard is not fetched a second time."
+    - "A Poonggo/Trackify partial/undersized response aborts the snapshot write."
+    - "tier_members.modified_at is cleared only after historical daily_member_stats metadata backfill succeeds."
+
+
+video_collection:
+  owner: ststat
+  executor: external_cron_to_github_actions
+  cadence: "independent job in the same pipeline run (normally every 4 hours)"
+  sources:
+    - youtube_data_api_v3
+    - youtube_rss_fallback
+    - soop_vod_open_graph
+  # 표 정의·정책·권한은 staruniv.sql 한 곳. ststat.sql 6번은 수집용 인덱스·열 설명만.
+  schema: staruniv/supabase/staruniv.sql
+  reads_tables:
+    - video_channels
+    - videos
+    - video_picks
+  owns:
+    video_channels:
+      - channel_id
+      - title
+      - thumb
+      - uploads
+      - updated_at
+    videos:
+      - channel_url
+      - title
+      - published
+      - thumb
+      - views
+      - short
+      - updated_at
+  admin_owned_and_protected:
+    video_channels:
+      - channel_url
+      - display_name
+      - source_order
+      - active
+    videos:
+      - hidden
+    video_picks:
+      - "*"
+  rules:
+    - "ststat never creates/deletes admin channel configuration."
+    - "ststat never overwrites videos.hidden."
+    - "video_picks remain admin-owned; sync_videos may fill only a null or empty SOOP thumb, checked again atomically at write time."
+    - "If all channels fail, the job fails. Nothing is deleted, but a channel that failed mid-upsert may be partially updated; re-running overwrites with the same values."
+
+
+match_round_integrity:
+  owner: ststat
+  executor: github_actions
+  cadence: "every main pipeline run"
+  base_tables:
+    matches:
+      writer: staruniv_admin
+    rounds:
+      writer: staruniv_admin
+  ststat_responsibility:
+    - validate rounds.match_no integrity
+    - detect match/round metadata mismatches
+    - provide read-only rounds_effective internal-mirror view
+    - log integrity results to sync_jobs
+  protected_rules:
+    - "ststat does not rewrite matches or rounds."
+    - "ststat does not infer a new match_no for modern Supabase rows."
+    - "ststat does not physically insert mirrored internal rounds."
+    - "admin-owned match/round fields remain authoritative."
