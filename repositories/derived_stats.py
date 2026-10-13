@@ -1,0 +1,269 @@
+from __future__ import annotations
+
+import threading
+import time
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
+
+from postgrest.types import ReturnMethod
+
+from repositories.supabase import fetch_all, get_supabase, new_supabase
+
+PAGE = 1000
+MATCH_COLUMNS = 'elo_match_id,match_date,winner_elo_id,loser_elo_id,map_id,category_id'
+MATCH_KEYS = MATCH_COLUMNS.split(',')
+# 경기 전체를 ID 구간으로 나눠 동시에 읽는다. 구간을 일꾼 수보다 잘게 나눠 일이 한쪽에 몰리지 않게 한다.
+LOAD_WORKERS = 6
+LOAD_RANGES = 24
+LOAD_ATTEMPTS = 3
+WRITE_WORKERS = 4
+WRITE_CHUNK = 1000
+# 러너가 죽어 활성화되지 못한 'building' 스냅샷은 이 시간이 지나면 지운다(작업 제한 45분).
+ORPHAN_BUILDING_AFTER = timedelta(hours=3)
+
+_local = threading.local()
+
+
+def _thread_client():
+    """일꾼 스레드마다 연결을 따로 둔다(한 연결을 여러 스레드가 나눠 쓰지 않게)."""
+    client = getattr(_local, 'client', None)
+    if client is None:
+        client = _local.client = new_supabase()
+    return client
+
+
+def _paged(table: str, select: str, order: str):
+    db = get_supabase()
+    return fetch_all(lambda: db.table(table).select(select).order(order))
+
+
+def load_source_data():
+    return {
+        'categories': _paged('elo_categories', 'category_id,name', 'category_id'),
+        'players': _paged('elo_players', 'elo_id,name,race', 'elo_id'),
+        'matches': load_matches(),
+        'tier_members': _paged(
+            'tier_members',
+            'elo_id,nickname,name,soop_id,tier,affiliation,race,modified_at,tier_table_registered,'
+            'promoted_tier_8,promoted_tier_7,promoted_tier_6,promoted_tier_5,'
+            'promoted_tier_4,promoted_tier_3,promoted_tier_2,promoted_tier_1,promoted_tier_0',
+            'id',
+        ),
+    }
+
+
+def _is_timeout(exc: Exception) -> bool:
+    return '57014' in str(exc) or 'statement timeout' in str(exc)
+
+
+def _load_match_range_compact(after: int, upto: int, depth: int = 0) -> list[dict]:
+    """(after, upto] 구간을 elo_matches_compact로 한 번에 읽는다(1000행 제한 없음).
+    시간 초과면 구간을 반으로 나눠 다시 읽고, 4번 나눠도 안 되면 포기한다."""
+    try:
+        data = _thread_client().rpc('elo_matches_compact', {'p_after': after, 'p_upto': upto}).execute().data
+    except Exception as exc:
+        if not _is_timeout(exc) or depth >= 4 or upto - after < 2:
+            raise
+        time.sleep(1 + depth)
+        mid = (after + upto) // 2
+        return _load_match_range_compact(after, mid, depth + 1) + _load_match_range_compact(mid, upto, depth + 1)
+    return [dict(zip(MATCH_KEYS, row)) for row in data or []]
+
+
+def _split_ranges(low: int, high: int, parts: int) -> list[tuple[int, int]]:
+    """low..high(포함)를 겹치지 않는 (after, upto] 구간들로 나눈다."""
+    span = high - low + 1
+    step = max(1, -(-span // parts))
+    ranges = []
+    after = low - 1
+    while after < high:
+        upto = min(high, after + step)
+        ranges.append((after, upto))
+        after = upto
+    return ranges
+
+
+def _load_matches_once() -> list[dict]:
+    db = get_supabase()
+    first = db.table('elo_matches').select('elo_match_id', count='exact').order(
+        'elo_match_id').limit(1).execute()
+    total = first.count or 0
+    if not first.data:
+        if total:
+            raise RuntimeError(f'elo_matches count={total} but no first row')
+        return []
+    low = first.data[0]['elo_match_id']
+    high = db.table('elo_matches').select('elo_match_id').order(
+        'elo_match_id', desc=True).limit(1).execute().data[0]['elo_match_id']
+
+    with ThreadPoolExecutor(LOAD_WORKERS) as pool:
+        parts = list(pool.map(lambda r: _load_match_range_compact(*r), _split_ranges(low, high, LOAD_RANGES)))
+    rows = [row for part in parts for row in part]  # 구간이 오름차순이라 합친 결과도 ID 순서다
+
+    # 덜 받거나(서버 행 제한 등) 겹쳐 받으면 계산이 틀어지므로 정확한 행 수와 맞춰 본다.
+    if len(rows) != total or len({row['elo_match_id'] for row in rows}) != len(rows):
+        raise RuntimeError(f'elo_matches load mismatch: loaded={len(rows)} expected={total}')
+    return rows
+
+
+def load_matches() -> list[dict]:
+    last_error = None
+    for attempt in range(LOAD_ATTEMPTS):
+        try:
+            return _load_matches_once()
+        except RuntimeError as exc:
+            last_error = exc
+        except Exception as exc:   # DB 시간 초과 등 일시 오류: 조금 쉬었다 다시
+            if not _is_timeout(exc):
+                raise
+            last_error = exc
+            time.sleep(5 * (attempt + 1))
+    raise last_error
+
+
+def load_active_history_cache(expected_metadata: dict) -> dict | None:
+    """입력 지문과 계산 버전이 같은 활성 스냅샷의 월별 이력을 복원한다."""
+    db = get_supabase()
+    active = db.table('elo_derived_snapshots').select('snapshot_id,metadata').eq(
+        'status', 'active').limit(1).execute().data or []
+    if not active:
+        return None
+    row = active[0]
+    metadata = row.get('metadata') or {}
+    required = ('history_cache_version', 'closed_history_fingerprint')
+    if any(metadata.get(key) != expected_metadata.get(key) for key in required):
+        return None
+
+    snapshot_id = row['snapshot_id']
+
+    def page(start, count=None):
+        return _thread_client().table('elo_rating_history').select('elo_id,month_end,rating', count=count).eq(
+            'snapshot_id', snapshot_id).order('month_end').order('elo_id').range(
+                start, start + PAGE - 1).execute()
+
+    # 첫 페이지로 전체 행 수를 알고 나머지는 동시에 읽는다
+    first = page(0, count='exact')
+    history = list(first.data or [])
+    total = first.count or len(history)
+    with ThreadPoolExecutor(LOAD_WORKERS) as pool:
+        for rows in pool.map(lambda start: page(start).data or [], range(PAGE, total, PAGE)):
+            history.extend(rows)
+    if len(history) != total:
+        return None                   # 읽는 도중 스냅샷이 바뀌었으면 캐시 없이 다시 계산한다
+    months = sorted({str(r['month_end'])[:7] for r in history})
+    by_player = {}
+    for item in history:
+        pid = str(item['elo_id'])
+        by_player.setdefault(pid, {})[str(item['month_end'])[:7]] = float(item['rating'])
+    return {
+        'months': months,
+        'players': {pid: [values.get(month) for month in months] for pid, values in by_player.items()},
+    }
+
+
+def load_source_signature() -> str | None:
+    """파생 계산 입력의 지문(ststat.sql 4절 elo_derived_source_signature). 읽지 못하면 None(건너뛰지 않고 계산한다)."""
+    try:
+        value = get_supabase().rpc('elo_derived_source_signature', {}).execute().data
+    except Exception as exc:
+        print(f'source signature unavailable, calculating anyway: {exc}')
+        return None
+    return str(value) if value else None
+
+
+def load_active_snapshot() -> dict | None:
+    """활성 스냅샷의 id·기준일·메타데이터(없으면 None)."""
+    rows = get_supabase().table('elo_derived_snapshots').select('snapshot_id,as_of,metadata').eq(
+        'status', 'active').limit(1).execute().data or []
+    return rows[0] if rows else None
+
+
+def snapshot_has_data(snapshot_id: str) -> bool:
+    """활성 스냅샷에 통계가 실제로 있는지 본다. 백업 복구로 표만 비어 있으면 지문이 같아도 다시 계산해야 한다."""
+    try:
+        for table in ('elo_ranking_meta', 'elo_rankings'):
+            rows = get_supabase().table(table).select('snapshot_id').eq(
+                'snapshot_id', snapshot_id).limit(1).execute().data or []
+            if not rows:
+                print(f'active snapshot {snapshot_id} has no {table} rows, recalculating')
+                return False
+    except Exception as exc:
+        print(f'snapshot data check failed, recalculating: {exc}')
+        return False
+    return True
+
+
+def create_snapshot(as_of: str, source_match_count: int, metadata: dict) -> str:
+    sid = str(uuid.uuid4())
+    get_supabase().table('elo_derived_snapshots').insert({
+        'snapshot_id': sid,
+        'as_of': as_of,
+        'status': 'building',
+        'source_match_count': source_match_count,
+        'metadata': metadata,
+    }).execute()
+    return sid
+
+
+def mark_failed(snapshot_id: str, error: str):
+    get_supabase().table('elo_derived_snapshots').update({
+        'status': 'failed',
+        'metadata': {'error': error[:3000]},
+    }).eq('snapshot_id', snapshot_id).eq('status', 'building').execute()
+
+
+def _insert_chunk(table: str, payload: list[dict]):
+    # 넣은 행을 되돌려받지 않는다(기본값은 전부 돌려받아 쓴 만큼 다시 내려받는다)
+    _thread_client().table(table).insert(payload, returning=ReturnMethod.minimal).execute()
+
+
+def _insert(table: str, rows: list[dict], snapshot_id: str, chunk: int = WRITE_CHUNK):
+    """'building' 스냅샷이라 순서가 상관없어 조각을 동시에 보낸다. 하나라도 실패하면 스냅샷은 활성화되지 않는다."""
+    def send(start):
+        # 표 전체 사본을 들고 있지 않게 보낼 조각만 그때 복사한다
+        _insert_chunk(table, [dict(r, snapshot_id=snapshot_id) for r in rows[start:start + chunk]])
+
+    with ThreadPoolExecutor(WRITE_WORKERS) as pool:
+        for future in [pool.submit(send, i) for i in range(0, len(rows), chunk)]:
+            future.result()
+    return len(rows)
+
+
+def write_snapshot(snapshot_id: str, payload: dict) -> dict:
+    counts = {
+        'player_stats': _insert('elo_player_stats', payload['player_stats'], snapshot_id),
+        'rankings': _insert('elo_rankings', payload['rankings'], snapshot_id),
+        'player_ratings': _insert('elo_player_ratings', payload['player_ratings'], snapshot_id),
+        'history': _insert('elo_rating_history', payload['rating_history'], snapshot_id),
+    }
+    meta = dict(payload['ranking_meta'], snapshot_id=snapshot_id)
+    get_supabase().table('elo_ranking_meta').insert(meta).execute()
+    counts['meta'] = 1
+    return counts
+
+
+def activate_snapshot(snapshot_id: str):
+    get_supabase().rpc('activate_elo_derived_snapshot', {'p_snapshot': snapshot_id}).execute()
+
+
+def cleanup_old_snapshots(keep: int = 1):
+    """지난 스냅샷은 keep개만 남긴다(되돌리기용 하나면 충분하고, 하나가 수만 행이다)."""
+    db = get_supabase()
+    rows = db.table('elo_derived_snapshots').select('snapshot_id,status,created_at').order('created_at', desc=True).execute().data or []
+    retired = [r for r in rows if r.get('status') in ('retired', 'failed')]
+    for row in retired[keep:]:
+        db.table('elo_derived_snapshots').delete().eq('snapshot_id', row['snapshot_id']).execute()
+    # 러너가 죽어 남은 'building' 스냅샷은 충분히 오래된 것만 지운다(파이프라인은 한 번에 하나만 돈다).
+    cutoff = datetime.now(timezone.utc) - ORPHAN_BUILDING_AFTER
+    for row in rows:
+        if row.get('status') == 'building' and _parse_ts(row.get('created_at')) < cutoff:
+            db.table('elo_derived_snapshots').delete().eq('snapshot_id', row['snapshot_id']).eq(
+                'status', 'building').execute()
+
+
+def _parse_ts(value) -> datetime:
+    if not value:
+        return datetime.max.replace(tzinfo=timezone.utc)
+    ts = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+    return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
