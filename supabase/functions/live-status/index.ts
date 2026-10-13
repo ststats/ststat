@@ -1,3 +1,4 @@
+import { collectMemberPosts } from './soop-posts.mjs';
 // Supabase Edge Function "live-status": 방송 중 표시(live_broadcasts)와 멤버 공지 모음(member_posts)을 채운다.
 // pg_cron이 2분마다 부른다(ststat.sql 12번). 공식 목록이 첫 쪽부터 안 되면 비공식 목록을 쓰되, 한 수집 안에서는
 // 한쪽만 쓴다(쪽 경계가 달라 빠지거나 겹친다).
@@ -228,56 +229,28 @@ async function lastPostsScanMs(): Promise<number> {
 }
 
 // 사이트(soop.js mergeOwnPosts)와 같은 규칙: 일반글+공지 중 본인 글만, titleNo로 중복 제거.
-function ownPosts(data: any, soopId: string) {
-  const owner = soopId.toLowerCase();
-  const all = [...(data?.contents || []), ...(data?.noticeData || [])]
-    .filter((p: any) => p && String(p.userId || "").toLowerCase() === owner);
-  const seen = new Set();
-  return all.filter((p: any) => (seen.has(p.titleNo) ? false : (seen.add(p.titleNo), true))).map((p: any) => ({
-    titleNo: p.titleNo,
-    titleName: p.titleName ?? null,
-    regDate: p.regDate ?? null,
-    userId: p.userId ?? null,
-    userNick: p.userNick ?? null,
-    content: p.content ? { textContent: p.content.textContent ?? "", content: p.content.content ?? "" } : null,
-    display: p.display ? { bbsName: p.display.bbsName ?? "" } : null,
-    count: p.count ? { likeCnt: p.count.likeCnt ?? 0, readCnt: p.count.readCnt ?? 0 } : null,
-    photos: Array.isArray(p.photos) ? p.photos.map((x: any) => ({ url: x?.url ?? "" })).filter((x: any) => x.url) : [],
-  }));
-}
-
-async function fetchBoard(soopId: string) {
-  const url = `https://api-channel.sooplive.com/v1.1/channel/${encodeURIComponent(soopId)}/board` +
-    `?perPage=${POSTS_PER_PAGE}&page=1`;
-  const res = await fetch(url, {
-    headers: { "User-Agent": "Mozilla/5.0", "Accept": "application/json" },
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-  });
-  if (!res.ok) throw new Error(`${soopId} 게시판 ${res.status}`);
-  const data = await res.json();
-  return { posts: ownPosts(data, soopId), totalPages: Number(data?.meta?.totalPages) || 1 };
-}
-
 async function refreshMemberPosts(force = false) {
   if (!force && Date.now() - (await lastPostsScanMs()) < POSTS_EVERY_MS) return { skipped: true };
   const ids = await loadActiveMemberIds();
   if (ids.length === 0) throw new Error("활동 멤버가 없습니다.");
-  const results: ({ id: string; posts: any[]; totalPages: number } | null)[] = new Array(ids.length).fill(null);
-  let nextIdx = 0;
-  await Promise.all(Array.from({ length: Math.min(POSTS_CONCURRENCY, ids.length) }, async () => {
-    while (nextIdx < ids.length) {
-      const i = nextIdx++;
-      results[i] = await fetchBoard(ids[i]).then(r => ({ id: ids[i], ...r }), () => null);
-    }
-  }));
-  const ok = results.filter(Boolean) as { id: string; posts: any[]; totalPages: number }[];
+  // This secret must match the existing badges COOKIE_KEY. Default remains public-only.
+  const scan = await collectMemberPosts(ids, {
+    // The operator explicitly selected public publication of collected notices.
+    allowFavorites: true,
+    cookieKey: Deno.env.get("BADGES_COOKIE_KEY") || "",
+    supabaseUrl: SUPABASE_URL,
+    serviceKey: SERVICE_KEY,
+    concurrency: POSTS_CONCURRENCY,
+    timeoutMs: FETCH_TIMEOUT_MS,
+  });
+  const ok = scan.results as { id: string; posts: any[]; totalPages: number }[];
   // 절반 넘게 못 받으면 SOOP 쪽 문제로 보고 바꾸지 않는다
   if (ok.length < ids.length / 2) throw new Error(`게시판 ${ids.length}명 중 ${ids.length - ok.length}명을 받지 못했습니다.`);
   const rows = ok.flatMap(r => r.posts.map(post => ({
     soop_id: r.id, title_no: post.titleNo, reg_date: post.regDate, total_pages: r.totalPages, post,
   })));
   const saved = await rpc("replace_member_posts", { p_rows: rows, p_scanned: ok.map(r => r.id), p_active: ids });
-  return { members: ids.length, fetched: ok.length, changed: saved };
+  return { members: ids.length, fetched: ok.length, changed: saved, cookie_status: scan.cookieStatus, fallback_members: scan.fallbackMembers };
 }
 
 function json(body: unknown, status = 200) {
