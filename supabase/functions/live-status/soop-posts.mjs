@@ -104,9 +104,28 @@ export async function collectMemberPosts(ids, {
   fetcher = fetch, concurrency = 6, timeoutMs = 8000, page = 1,
 } = {}) {
   let cookie = '';
+  let bridgeSecret = '';
   let cookieStatus = 'disabled';
   if (allowFavorites) {
-    if (cookieKey.length < 16) cookieStatus = 'key_missing';
+    if (cookieKey.length < 16) {
+      // Vercel Secret values cannot be read back. Use its existing decrypting
+      // server without transferring the SOOP cookie or encryption key.
+      cookieStatus = 'bridge_unavailable';
+      try {
+        const response = await fetcher(new URL('/rest/v1/rpc/badge_notice_bridge_secret', supabaseUrl), {
+          method: 'POST', body: '{}', redirect: 'error',
+          headers: { apikey: serviceKey, Authorization: 'Bearer ' + serviceKey, 'Content-Type': 'application/json' },
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+        if (response.ok) {
+          const value = await response.json();
+          if (typeof value === 'string' && value.length >= 16) {
+            bridgeSecret = value;
+            cookieStatus = 'bridge_ready';
+          }
+        }
+      } catch (_) { /* public fallback; never log bridge credentials */ }
+    }
     else {
       try {
         cookie = await loadBadgeCookie({ supabaseUrl, serviceKey, secret: cookieKey, fetcher });
@@ -123,7 +142,27 @@ export async function collectMemberPosts(ids, {
     while (cursor < ids.length) {
       const index = cursor++;
       const id = ids[index];
-      let found = await fetchSoopBoard(id, { cookie, page, fetcher, timeoutMs }).catch(() => null);
+      let found = null;
+      if (bridgeSecret) {
+        try {
+          const url = new URL('https://staruniv-badges.vercel.app/api/shared-notices');
+          url.searchParams.set('soop_id', id);
+          url.searchParams.set('page', String(page));
+          const response = await fetcher(url, {
+            headers: { Authorization: 'Bearer ' + bridgeSecret, Accept: 'application/json' },
+            redirect: 'error', signal: AbortSignal.timeout(20000),
+          });
+          if (response.ok) {
+            const data = await response.json();
+            if (Array.isArray(data?.posts)) {
+              const total = Number(data.totalPages);
+              found = { posts: ownPosts({ contents: data.posts }, id), totalPages: Number.isSafeInteger(total) && total > 0 ? total : 1 };
+            }
+          }
+        } catch (_) { /* independent public read below */ }
+        if (!found) fallbackMembers++;
+      }
+      if (!found) found = await fetchSoopBoard(id, { cookie, page, fetcher, timeoutMs }).catch(() => null);
       if (!found && cookie) {
         // Never continue publishing stale private posts after credential rejection.
         fallbackMembers++;

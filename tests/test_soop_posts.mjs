@@ -64,3 +64,41 @@ test('expired cookie retries public collection and removes access-dependent noti
   assert.equal(scan.fallbackMembers, 1);
   assert.deepEqual(scan.results[0].posts.map(p=>p.titleNo), [1]);
 });
+
+test('non-readable Vercel key uses authenticated notice bridge, never transfers SOOP credentials', async () => {
+  const calls = [];
+  const scan = await collectMemberPosts(['alice'], { allowFavorites: true, supabaseUrl: 'https://demo.supabase.co', serviceKey: 'server-key', page: 2,
+    fetcher: async (input, options) => {
+      const url = new URL(input); calls.push(url);
+      assert.equal(options.redirect, 'error');
+      if (url.pathname.endsWith('/badge_notice_bridge_secret')) {
+        assert.equal(options.headers.Authorization, 'Bearer server-key');
+        return json('test-only-bridge-secret');
+      }
+      assert.equal(url.origin, 'https://staruniv-badges.vercel.app');
+      assert.equal(url.searchParams.get('page'), '2');
+      assert.equal(options.headers.Authorization, 'Bearer test-only-bridge-secret');
+      assert.equal(options.headers.Cookie, undefined);
+      return json({ posts: [{ titleNo: 9, userId: 'alice', secret: 'strip' }], totalPages: 5 });
+    } });
+  assert.equal(scan.cookieStatus, 'bridge_ready');
+  assert.equal(scan.results[0].posts[0].titleNo, 9);
+  assert.equal(scan.results[0].totalPages, 5);
+  assert.equal(scan.fallbackMembers, 0);
+  assert.equal(calls.length, 2);
+  assert.doesNotMatch(JSON.stringify(scan), /server-key|test-only-bridge-secret|strip/);
+});
+test('bridge authentication or deployment failure falls back to the requested public page', async () => {
+  const scan = await collectMemberPosts(['alice'], { allowFavorites: true, supabaseUrl: 'https://demo.supabase.co', serviceKey: 'server-key', page: 2,
+    fetcher: async (input, options) => {
+      const url = new URL(input);
+      if (url.pathname.endsWith('/badge_notice_bridge_secret')) return json('test-only-bridge-secret');
+      if (url.hostname === 'staruniv-badges.vercel.app') return new Response(null, { status: 401 });
+      assert.equal(url.searchParams.get('page'), '2');
+      assert.equal(options.headers.Authorization, undefined);
+      assert.equal(options.headers.Cookie, undefined);
+      return json(board());
+    } });
+  assert.equal(scan.fallbackMembers, 1);
+  assert.equal(scan.results.length, 1);
+});
