@@ -5,7 +5,8 @@ import { decryptBadgeCookie, collectMemberPosts, boardApiUrl, ownPosts } from '.
 const key = 'unit-test-only-1234567890';
 function encrypt(text) {
   const iv = crypto.randomBytes(12), cipher = crypto.createCipheriv('aes-256-gcm', crypto.createHash('sha256').update(key).digest(), iv);
-  return Buffer.concat([iv, cipher.getAuthTag(), cipher.update(text, 'utf8'), cipher.final()]).toString('base64');
+  const encrypted = Buffer.concat([cipher.update(text, 'utf8'), cipher.final()]);
+  return Buffer.concat([iv, cipher.getAuthTag(), encrypted]).toString('base64');
 }
 const json = x => new Response(JSON.stringify(x));
 const board = () => ({ contents: [{ titleNo: 1, userId: 'alice', regDate: '2026-10-12 10:00:00' }], noticeData: [{ titleNo: 1, userId: 'alice' }, { titleNo: 2, userId: 'alice' }, { titleNo: 3, userId: 'other' }], meta: { totalPages: 2 } });
