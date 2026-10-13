@@ -31,6 +31,12 @@ export function createNoticeHandler({ supabaseUrl, serviceKey, cookieKey = '', f
       // Restrict collection to the existing active roster; callers cannot use this as a general proxy.
       const members = await db('members?select=soop_id&left_date=is.null&soop_id=eq.' + encodeURIComponent(id) + '&limit=1');
       if (!members.length) return reply({ error: 'Member not found' }, 404);
+      if (page === 1) {
+        // First pages are already collected by live-status. Return this member
+        // only instead of making the browser download the entire roster's feed.
+        const rows = await db('member_posts?select=post,total_pages&soop_id=eq.' + encodeURIComponent(id) + '&order=reg_date.desc');
+        if (rows.length) return reply({ posts: rows.map(row => row.post), totalPages: Number(rows[0].total_pages) || 1 });
+      }
       const cache = await db('notice_public_pages?select=payload,fetched_at&soop_id=eq.' + encodeURIComponent(id) + '&page=eq.' + page);
       if (cache[0] && now() - Date.parse(cache[0].fetched_at) < 120000)
         return reply(cache[0].payload);

@@ -11,13 +11,14 @@ function encrypted() {
   return Buffer.concat([iv, cipher.getAuthTag(), body]).toString('base64');
 }
 const json = data => new Response(JSON.stringify(data));
-function setup({ expired = false, cache = [], member = true, unavailable = false } = {}) {
+function setup({ expired = false, cache = [], member = true, unavailable = false, firstPageRows = [] } = {}) {
   const calls = [], writes = [];
   const handler = createNoticeHandler({ supabaseUrl: 'https://test.supabase.co', serviceKey: 'server-test-key', cookieKey: key,
     fetcher: async (input, options) => {
       const url = new URL(input);
       calls.push({ url, options });
       if (url.pathname.endsWith('/members')) return json(member ? [{ soop_id: 'alice' }] : []);
+      if (url.pathname.endsWith('/member_posts')) return json(firstPageRows);
       if (url.pathname.endsWith('/badge_files')) return json([{ content: encrypted() }]);
       if (url.pathname.endsWith('/notice_public_pages')) {
         if (options.method === 'POST') { writes.push(JSON.parse(options.body)); return new Response(null, { status: 201 }); }
@@ -54,6 +55,16 @@ test('fresh cache avoids SOOP and cookie reads', async () => {
   const { handler, calls } = setup({ cache: [{ payload: { posts: [], totalPages: 3 }, fetched_at: new Date().toISOString() }] });
   assert.equal((await handler(request('soop_id=alice&page=2'))).status, 200);
   assert.equal(calls.length, 2);
+});
+test('personal first page reads only that member from the existing scan, without SOOP or bridge calls', async () => {
+  const { handler, calls } = setup({ firstPageRows: [{ post: { titleNo: 8, userId: 'alice' }, total_pages: 5 }] });
+  const response = await handler(request('soop_id=alice&page=1'));
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.posts[0].titleNo, 8);
+  assert.equal(body.totalPages, 5);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].url.searchParams.get('soop_id'), 'eq.alice');
 });
 test('validation and roster membership prevent arbitrary proxy requests', async () => {
   const { handler, calls } = setup({ member: false });
