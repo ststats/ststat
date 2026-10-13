@@ -235,7 +235,8 @@ async function refreshMemberPosts(force = false) {
   if (ids.length === 0) throw new Error("활동 멤버가 없습니다.");
   // This secret must match the existing badges COOKIE_KEY. Default remains public-only.
   const scan = await collectMemberPosts(ids, {
-    allowFavorites: Deno.env.get("SOOP_FAVORITES_PUBLICATION_ENABLED") === "true",
+    // The operator explicitly selected public publication of collected notices.
+    allowFavorites: true,
     cookieKey: Deno.env.get("BADGES_COOKIE_KEY") || "",
     supabaseUrl: SUPABASE_URL,
     serviceKey: SERVICE_KEY,

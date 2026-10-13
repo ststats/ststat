@@ -62,6 +62,7 @@ export async function loadBadgeCookie({ supabaseUrl, serviceKey, secret, fetcher
   const endpoint = new URL('/rest/v1/badge_files', supabaseUrl);
   endpoint.search = 'select=content&name=eq.cookie&limit=1';
   const response = await fetcher(endpoint.toString(), {
+    redirect: 'error',
     headers: { apikey: serviceKey, Authorization: 'Bearer ' + serviceKey, Accept: 'application/json' },
     signal: AbortSignal.timeout(8000),
   });
@@ -85,11 +86,12 @@ export async function fetchSoopBoard(soopId, { cookie = '', page = 1, perPage = 
       headers.Referer = 'https://www.sooplive.co.kr/station/' + encodeURIComponent(soopId) + '/board';
     }
     try {
-      const response = await fetcher(url, { headers, signal: AbortSignal.timeout(timeoutMs) });
+      const response = await fetcher(url, { headers, redirect: 'error', signal: AbortSignal.timeout(timeoutMs) });
       if (!response.ok) continue;
       const board = await response.json();
       if (!Array.isArray(board?.contents)) continue;
-      return { posts: ownPosts(board, soopId), totalPages: Number(board?.meta?.totalPages) || 1 };
+      const total = Number(board?.meta?.totalPages);
+      return { posts: ownPosts(board, soopId), totalPages: Number.isSafeInteger(total) && total > 0 ? total : 1 };
     } catch (_) { /* never include cookie in an error */ }
   }
   throw new Error('SOOP board unavailable');
@@ -99,7 +101,7 @@ export async function fetchSoopBoard(soopId, { cookie = '', page = 1, perPage = 
 // Restricted posts are only republished after an explicit operator opt-in.
 export async function collectMemberPosts(ids, {
   allowFavorites = false, cookieKey = '', supabaseUrl = '', serviceKey = '',
-  fetcher = fetch, concurrency = 6, timeoutMs = 8000,
+  fetcher = fetch, concurrency = 6, timeoutMs = 8000, page = 1,
 } = {}) {
   let cookie = '';
   let cookieStatus = 'disabled';
@@ -121,11 +123,11 @@ export async function collectMemberPosts(ids, {
     while (cursor < ids.length) {
       const index = cursor++;
       const id = ids[index];
-      let found = await fetchSoopBoard(id, { cookie, fetcher, timeoutMs }).catch(() => null);
+      let found = await fetchSoopBoard(id, { cookie, page, fetcher, timeoutMs }).catch(() => null);
       if (!found && cookie) {
         // Never continue publishing stale private posts after credential rejection.
         fallbackMembers++;
-        found = await fetchSoopBoard(id, { fetcher, timeoutMs }).catch(() => null);
+        found = await fetchSoopBoard(id, { page, fetcher, timeoutMs }).catch(() => null);
       }
       if (found) results[index] = { id, ...found };
     }
