@@ -1,3 +1,4 @@
+// Temporary write probe; no behavior change.
 import { collectMemberPosts } from './soop-posts.mjs';
 // Supabase Edge Function "live-status": 방송 중 표시(live_broadcasts)와 멤버 공지 모음(member_posts)을 채운다.
 // pg_cron이 2분마다 부른다(ststat.sql 12번). 공식 목록이 첫 쪽부터 안 되면 비공식 목록을 쓰되, 한 수집 안에서는
