@@ -5,6 +5,7 @@ import calendar
 import hashlib
 
 from processors.staruniv_ranking import build_index, rank
+from processors.staruniv_prediction import build_prediction_model
 
 
 # 마감 월 이력 캐시 버전. 랭킹 모델·상수가 지난달 값을 바꾸면 올린다(다른 버전 캐시는 버린다).
@@ -168,6 +169,7 @@ def build_payload(source: dict, history_cache: dict | None = None) -> dict:
         'player_ratings': player_ratings,
         'ranking_meta': ranking_meta,
         'rating_history': history,
+        'prediction_model': build_prediction_model(store, source['tier_members'], index, source['maps']),
     }
     validate_payload(source, payload)
     return payload
@@ -185,3 +187,10 @@ def validate_payload(source: dict, payload: dict):
         raise RuntimeError('Player ratings unexpectedly fewer than ranked players')
     if not payload['ranking_meta'].get('as_of'):
         raise RuntimeError('Ranking metadata missing as_of')
+
+    prediction = payload.get('prediction_model') or {}
+    if prediction.get('model_version') != 'joint-map-v1' or prediction.get('as_of') != payload['ranking_meta']['as_of']:
+        raise RuntimeError('Prediction model version or snapshot date is invalid')
+    if len((prediction.get('ratings') or {}).get('r') or []) < len(payload['rankings']):
+        raise RuntimeError('Prediction ratings unexpectedly fewer than ranked players')
+

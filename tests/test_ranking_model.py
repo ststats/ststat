@@ -13,6 +13,7 @@ from processors.staruniv_ranking import (
     TIER_ORDER,
     UNRANKED,
     build_pairs,
+    build_index,
     fit_delta,
     race_code,
     rank,
@@ -97,7 +98,7 @@ def test_promoted_player_does_not_carry_old_tier_edge_into_new_tier():
 
 
 def test_race_matchup_is_recovered_and_antisymmetric():
-    """테란이 저그에게 0.3 로짓 우위인 세계에서 TZ 상성을 되찾는다."""
+    """TZ=.3,ZP=PT=0의 식별 가능한 순환 평균 .1을 되찾는다."""
     rng = random.Random(3)
     true, players, node_race = {}, {}, {}
     for i in range(42):
@@ -105,7 +106,7 @@ def test_race_matchup_is_recovered_and_antisymmetric():
         true[pid] = rng.gauss(0, .2)
         players[pid] = {'t': '5'}
         node_race[pid] = 'TZP'[i % 3]
-    # 상성은 '티어 안 종족별 평균 실력이 같다'는 가정으로만 식별되므로 종족별 참값 평균을 0으로 맞춘다.
+    # 합성 실력의 종족별 평균은 같게 만들되, 모델은 이 조건을 가정하지 않는다.
     for r in 'TZP':
         grp = [p for p in true if node_race[p] == r]
         mean = sum(true[p] for p in grp) / len(grp)
@@ -153,7 +154,10 @@ def test_rank_orders_by_theta_and_exports_every_fitted_player():
     players = {pid: {'n': f'p{pid}', 'r': 'TZP'[int(pid) % 3],
                      **({'t': '4' if pid.startswith('1') else '5'} if pid != '300' else {})}
                for pid in ids}
-    out = {'players': players}
+    # 실제 pipeline처럼 build_index부터 실행해야 티어표 밖 상대의 누락도 잡힌다.
+    tier_rows = [{'elo_id': pid, 'nickname': p['n'], 'tier': p['t']}
+                 for pid, p in players.items() if 't' in p]
+    out = build_index(store, tier_rows, include_unlisted=True)
     rank(store, out, [], with_history=False)
     meta = out['ranking']
     assert 'backtest' not in meta
@@ -167,6 +171,16 @@ def test_rank_orders_by_theta_and_exports_every_fitted_player():
     assert ps['300'].get('theta') is not None                  # 순위 밖 선수도 θ 공개
     assert ps['300'].get('k') is None
     assert all(p.get('thetaSE', 0) > 0 for p in ps.values() if p.get('theta') is not None)
+
+
+def test_build_pairs_never_uses_future_results():
+    players = {'1': {'t': '5'}, '2': {'t': '5'}}
+    past = [1, TODAY.isoformat(), 1, 2, None, 0]
+    future = [2, (TODAY + dt.timedelta(days=1)).isoformat(), 2, 1, None, 0]
+    result = build_pairs([past, future], ['college_event'], TODAY, players, {}, T_POS)
+    assert result[6] == ['1', '2']
+    assert result[0].tolist() == [0]
+    assert result[2].tolist() == [1.0]
 
 
 def test_accept_solution_blocks_bad_results_and_tolerates_near_optimal():
