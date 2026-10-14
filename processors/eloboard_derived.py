@@ -188,3 +188,9 @@ def validate_payload(source: dict, payload: dict):
     if not payload['ranking_meta'].get('as_of'):
         raise RuntimeError('Ranking metadata missing as_of')
 
+    prediction = payload.get('prediction_model') or {}
+    if prediction.get('model_version') != 'joint-map-v1' or prediction.get('as_of') != payload['ranking_meta']['as_of']:
+        raise RuntimeError('Prediction model version or snapshot date is invalid')
+    if len((prediction.get('ratings') or {}).get('r') or []) < len(payload['rankings']):
+        raise RuntimeError('Prediction ratings unexpectedly fewer than ranked players')
+
