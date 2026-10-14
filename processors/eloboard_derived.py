@@ -193,4 +193,3 @@ def validate_payload(source: dict, payload: dict):
         raise RuntimeError('Prediction model version or snapshot date is invalid')
     if len((prediction.get('ratings') or {}).get('r') or []) < len(payload['rankings']):
         raise RuntimeError('Prediction ratings unexpectedly fewer than ranked players')
-

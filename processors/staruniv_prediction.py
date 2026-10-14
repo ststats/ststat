@@ -1,7 +1,7 @@
-"""Entry predictions only. Never writes ranking scores or ranking history.
+"""엔트리 예상 승률 전용 모델. 랭킹 점수·월별 이력은 건드리지 않는다(staruniv_ranking과 별도).
 
-Joint player strength, centered personal race effects and map/race effects.
-Hyperparameters selected by chronological replay; no pair or personal-map residuals.
+선수 실력 + 선수별 종족전 성향(세 값 평균 0) + 맵별 종족 상성을 함께 맞춘다.
+prior 폭(MATCHUP_SIGMA·MAP_RACE_SIGMA)은 시간순 재현으로 골랐고, 상대전적·개인 맵 승률은 따로 더하지 않는다.
 """
 
 from __future__ import annotations

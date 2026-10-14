@@ -63,20 +63,6 @@ StarUniv 기본 표를 만드는 staruniv 저장소 `supabase/staruniv.sql`을 �
 
 ## 운영 메모
 
-### 랭킹과 엔트리 예상 승률
-
-- `staruniv_ranking.py`는 기존 기본 실력 순위와 월별 이력을 유지합니다.
-- `staruniv_prediction.py`는 승률 전용 실력·개인 종족전 성향·맵별 종족 효과를 함께 학습합니다.
-  개인 종족 효과의 prior sigma는 0.25, 맵 효과는 0.30입니다. 상대전적·개인 맵 승률은 추가 가산하지 않습니다.
-- 승률 모델은 `elo_prediction_models`에 별도 저장하고, 랭킹과 같은 파생 스냅샷을 활성화할 때 공개합니다.
-  공개 API `elo_prediction_model()`은 활성 모델 하나만 반환하며 원본 테이블은 서비스 역할만 접근합니다.
-- 최초 적용은 `supabase/migrations/*_separate_entry_prediction.sql` 또는 최신 통합 SQL 적용 →
-  백엔드 배포 및 `calculate_eloboard_stats` 실행 → `joint-map-v1` 응답 확인 → 프런트 배포 순서입니다.
-  모델이 없으면 프런트는 랭킹 점수로 임의의 승률을 만들지 않습니다.
-- 수집 없이 모델만 다시 계산할 때는 Actions의 `Rebuild EloBoard models`를 실행합니다.
-  정기 파이프라인과 같은 실행 잠금을 사용하며, 변경 없는 월별 랭킹 이력 캐시는 재사용합니다.
-
-
 - **EloBoard 요청 간격은 최소 2초**(운영자 요청). `ELOBOARD_DELAY`는 늘릴 수만 있고, 2초 미만이나 잘못된 값은
   `collectors/eloboard.py`의 `MIN_DELAY`(2초)로 올라갑니다.
 - 정기 수집은 이번 달 1일(매월 1~7일은 지난달 1일)부터 다시 읽습니다. 사라진 경기 삭제는 그 기간 안에서만,
@@ -103,6 +89,17 @@ StarUniv 기본 표를 만드는 staruniv 저장소 `supabase/staruniv.sql`을 �
   실패로 닫힙니다. 같은 이유로 남은 `building` 파생 스냅샷도 3시간이 지나면 다음 파생 계산 때 지워집니다.
 - 파생 계산(`calculate_eloboard_stats`)은 경기를 ID 구간으로 나눠 동시에 읽고(정확한 행 수와 맞춰 봄),
   결과도 동시에 씁니다. 단계별 걸린 시간은 `sync_jobs.metadata.timings`에 남습니다.
-  먼저 입력 지문(`elo_derived_source_signature()`: 경기·선수·형식·티어표 + 계산 코드)을 활성 스냅샷의 것과 비교해,
+  먼저 입력 지문(`elo_derived_source_signature()`: 경기·선수·형식·맵·티어표 + 계산 코드)을 활성 스냅샷의 것과 비교해,
   같으면 읽지 않고 건너뜁니다(`metadata.skipped`). 새 경기나 티어표 수정이 없는 회차의 Egress·로그를 아낍니다.
 - 티어 랭킹 모델 설명과 계산 코드: `processors/staruniv_ranking.py`(파일 머리 설명).
+
+### 랭킹과 엔트리 예상 승률
+
+- `staruniv_ranking.py`는 기존 기본 실력 순위와 월별 이력을 유지합니다.
+- `staruniv_prediction.py`는 승률 전용 실력·개인 종족전 성향·맵별 종족 효과를 함께 학습합니다.
+  개인 종족 효과의 prior sigma는 0.25, 맵 효과는 0.30입니다. 상대전적·개인 맵 승률은 추가 가산하지 않습니다.
+- 승률 모델은 `elo_prediction_models`에 별도 저장하고, 랭킹과 같은 파생 스냅샷을 활성화할 때 공개합니다.
+  공개 API `elo_prediction_model()`은 활성 모델 하나만 반환하며 원본 테이블은 서비스 역할만 접근합니다.
+- 모델이 없으면 프런트는 랭킹 점수로 임의의 승률을 만들지 않습니다.
+- 수집 없이 모델만 다시 계산할 때는 Actions의 `Rebuild EloBoard models`를 실행합니다.
+  정기 파이프라인과 같은 실행 잠금을 사용하며, 변경 없는 월별 랭킹 이력 캐시는 재사용합니다.
