@@ -21,7 +21,7 @@ from repositories.derived_stats import (
 
 
 # 계산 코드가 바뀌면 입력이 같아도 다시 계산해야 하므로 지문에 코드도 넣는다(줄바꿈 차이는 무시).
-_CODE_FILES = ('processors/eloboard_derived.py', 'processors/staruniv_ranking.py')
+_CODE_FILES = ('processors/eloboard_derived.py', 'processors/staruniv_ranking.py', 'processors/staruniv_prediction.py')
 
 
 def _code_fingerprint() -> str:

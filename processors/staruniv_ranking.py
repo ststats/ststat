@@ -1,6 +1,7 @@
 """티어 안 순위(티어랭킹)를 계산한다. eloboard_derived가 build_index()·rank()로 파생 표에 저장한다.
 
-모델: θ = 티어 기준선 m + 티어 안 편차 δ, 가중 로지스틱 최대가능도(볼록, scipy L-BFGS).
+랭킹 모델: θ = 티어 기준선 m + 티어 안 편차 δ. 기존 공통 종족 상성 모델을 유지한다.
+예상 승률은 staruniv_prediction의 별도 모델이며 이 순위와 월별 이력을 바꾸지 않는다.
   · 카드군(갓~스페이드)과 숫자군(0~베이비)을 잇는 경기가 통산 2,009판뿐이라 보통 Elo는 두 군의 높이가
     어긋난다(숫자군이 위로 뜬다). m을 티어 간 맞대결로 맞춰 한 사다리에 묶는다.
   · 다리 경기는 대부분 옛날 것이라 m·종족 상성은 긴 창(540일), δ는 짧은 창(90일)으로 2단에 나눠 맞춘다.
@@ -54,11 +55,11 @@ MIN_RECENT_GAMES = 10       # 이 기간에 이보다 적게 뒀으면 순위에
 # 저표본은 SIGMA_DELTA와 MIN_RECENT_GAMES가 막는다. 표준오차는 데이터 티어 판정에만 쓴다.
 DATA_TIER_Z = 1.50          # 데이터 티어: θ ± 이 배수×표준오차가 경계를 완전히 넘을 때만 괴리
 
-# 전 선수 공통의 종족 상성(TZ·ZP·PT 방향 로짓 우위). 따로 맞추지 않으면 상대 종족이 치우친 선수의 δ가 흔들린다.
-# 데이터는 세 상성의 합만 정하고 나머지는 δ prior가 정한다(티어 안 종족별 평균 실력이 같다고 본다).
+# 랭킹은 기존 세 공통 상성을 독립 추정한다. 승률 전용 학습만 cycle 분해를 요청한다.
 RACES = ('T', 'Z', 'P')
 RACE_PAIRS = ('TZ', 'ZP', 'PT')
 LAMBDA_RACE = 1e-6          # 수치 안정용으로만 아주 약하게 묶는다
+RACE_MODE = 'free'
 
 # δ prior 폭. 티어 한 칸은 로짓 약 0.36(1칸 차 승률 58.8%). 0.625~0.725 중 로그손실·승급 포착 균형이 가장 좋았다.
 SIGMA_DELTA = 0.675
@@ -126,8 +127,8 @@ def _pid_sort_key(pid):
         return (1, str(pid))
 
 
-def build_index(store, tier_rows):
-    """순위 계산 대상 선수 목록: 티어표에 이어진 선수 중 경기가 한 판이라도 있는 사람.
+def build_index(store, tier_rows, include_unlisted=False):
+    """랭킹은 기존 명단 범위, 승률 학습은 include_unlisted로 모든 상대를 포함한다.
     store는 eloboard_derived.compact_store() 결과
     (players: {id: [이름, 종족]}, cats: [형식 코드], rows: [[경기id, 날짜, 승자, 패자, 맵, 형식 번호]]).
     반환: {'players': {pid: {n, r, tm, s, t?}}} - rank()가 여기에 순위 필드를 덧붙인다."""
@@ -145,12 +146,15 @@ def build_index(store, tier_rows):
         if len(r) < 6:
             continue
         for pid in (str(r[2]), str(r[3])):
-            if pid in linked:
+            if pid in players and (include_unlisted or pid in linked):
                 games[pid] = games.get(pid, 0) + 1
     index_players = {}
     for pid in sorted(games, key=_pid_sort_key):
         info = players.get(pid) or ['', '']
-        index_players[pid] = {'n': info[0], 'r': (info[1] if len(info) > 1 else '') or '', **linked[pid]}
+        index_players[pid] = {
+            'n': info[0], 'r': (info[1] if len(info) > 1 else '') or '',
+            **linked.get(pid, {}),
+        }
     if missing:
         print(f'   ℹ️ eloboard에서 못 찾은 티어표 선수 {len(missing)}명: {", ".join(missing[:15])}'
               f'{" ..." if len(missing) > 15 else ""}')
@@ -265,7 +269,7 @@ def build_pairs(rows, cats, today, players, ladders, t_pos, category_weights=Non
             continue
         age = (today - day).days
         if age < 0:
-            age = 0
+            continue  # 과거 시점 추정과 홀드아웃에서 미래 경기 유입을 차단한다.
         cw = cat_w[cat] if isinstance(cat, int) and 0 <= cat < len(cat_w) else fallback_weight
         w = cw * 0.5 ** (age / HALF_LIFE_DAYS)
         wt = cw * 0.5 ** (age / HALF_LIFE_TIER_DAYS)
@@ -386,7 +390,7 @@ def fit_delta(wi, li, ww, win_tier_idx, lose_tier_idx, lam, n_players, m,
 
 
 def solve_two_stage(wi, li, ww, ww_tier, win_tier_idx, lose_tier_idx,
-                    current_tier_idx, lam, n, n_tiers, wsum, wsum_tier, node_race=None):
+                    current_tier_idx, lam, n, n_tiers, wsum, wsum_tier, node_race=None, race_mode='free'):
     """1단으로 티어 간격 m과 종족 상성(긴 창), 2단으로 개인 폼 δ(짧은 창)를 맞춘다.
     1단은 경기 당시 티어로 놓아 승급 전 성적이 새 기준선을 끌어올리지 않게 한다.
     2단은 지금 티어로 놓는다 - 당시 티어로 놓으면 옛 티어에서 번 δ가 새 기준선에 얹혀
@@ -403,7 +407,7 @@ def solve_two_stage(wi, li, ww, ww_tier, win_tier_idx, lose_tier_idx,
     m, _, race = fit(
         wi[keep_t], li[keep_t], ww_tier[keep_t],
         win_tier_idx[keep_t], lose_tier_idx[keep_t], lam, n, n_tiers,
-        race_idx=race_idx[keep_t], race_sign=race_sign[keep_t])
+        race_idx=race_idx[keep_t], race_sign=race_sign[keep_t], race_mode=race_mode)
 
     thin = unranked & (wsum < MIN_UNRANKED_GAMES)
     keep = ~(thin[wi] | thin[li])
@@ -420,7 +424,7 @@ def solve_two_stage(wi, li, ww, ww_tier, win_tier_idx, lose_tier_idx,
 
 
 def standard_errors(lam, wi, li, ww, match_diff):
-    """선수별 표준오차 = 1 / sqrt(prior 정밀도 + Σ w·p(1-p))."""
+    """상대 실력·티어·종족항을 고정한 조건부 오차 근사. 전체 모델의 신뢰구간은 아니다."""
     d = np.clip(match_diff, -60, 60)
     p_hat = 1.0 / (1.0 + np.exp(-d))
     info = ww * p_hat * (1.0 - p_hat)
@@ -562,14 +566,18 @@ def build_history(rows, cats, players, t_pos, n_tiers, last_day, ladders,
 
 
 def fit(wi, li, ww, win_tier_idx, lose_tier_idx, lam, n_players, n_tiers,
-        race_idx=None, race_sign=None):
+        race_idx=None, race_sign=None, race_mode=RACE_MODE):
     """θ = m[티어] + δ와 종족 상성을 가중 로지스틱 최대가능도로 맞춘다. 반환: (m, delta, race)
     최소화: -Σ w·log sigmoid(d) + (1/2)Σ λ_i·δ_i² + (λ_m/2)Σm² + (λ_r/2)Σr², lam은 선수별 prior 정밀도(1/σ²).
     """
-    n_race = len(RACE_PAIRS)
+    if race_mode not in ('free', 'cycle'):
+        raise ValueError('race_mode must be free or cycle')
+    n_race = 1 if race_mode == 'cycle' else len(RACE_PAIRS)
     if race_idx is None:
         race_idx = np.zeros(len(wi), dtype=np.int64)
         race_sign = np.zeros(len(wi), dtype=np.float64)
+    if race_mode == 'cycle':
+        race_idx = np.zeros(len(wi), dtype=np.int64)
 
     def fun_grad(x):
         delta = x[:n_players]
@@ -613,6 +621,8 @@ def fit(wi, li, ww, win_tier_idx, lose_tier_idx, lam, n_players, n_tiers,
     delta = res.x[:n_players].copy()
     m = tier_parameters_to_levels(res.x[n_players:n_players + n_tiers], n_tiers)
     race = res.x[n_players + n_tiers:].copy()
+    if race_mode == 'cycle':
+        race = np.repeat(race, len(RACE_PAIRS))
     # θ는 차이만 의미가 있어 티어 기준선 평균을 0에 묶는다(미분류는 평균에서 뺀다).
     m -= m[:len(TIER_ORDER)].mean()
     return m, delta, race

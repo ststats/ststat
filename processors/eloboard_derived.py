@@ -5,10 +5,11 @@ import calendar
 import hashlib
 
 from processors.staruniv_ranking import build_index, rank
+from processors.staruniv_prediction import build_prediction_model
 
 
 # 마감 월 이력 캐시 버전. 랭킹 모델·상수가 지난달 값을 바꾸면 올린다(다른 버전 캐시는 버린다).
-RANKING_HISTORY_CACHE_VERSION = 'ranking-2026-10-04-v7'
+RANKING_HISTORY_CACHE_VERSION = 'ranking-original-v9'
 
 
 def history_cache_metadata(source: dict) -> dict:
@@ -168,6 +169,7 @@ def build_payload(source: dict, history_cache: dict | None = None) -> dict:
         'player_ratings': player_ratings,
         'ranking_meta': ranking_meta,
         'rating_history': history,
+        'prediction_model': build_prediction_model(store, source['tier_members'], index, source['maps']),
     }
     validate_payload(source, payload)
     return payload
@@ -185,3 +187,4 @@ def validate_payload(source: dict, payload: dict):
         raise RuntimeError('Player ratings unexpectedly fewer than ranked players')
     if not payload['ranking_meta'].get('as_of'):
         raise RuntimeError('Ranking metadata missing as_of')
+

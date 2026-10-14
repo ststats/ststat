@@ -62,7 +62,7 @@ def test_player_ratings_include_unranked_players():
     assert rows[10]['as_of'] == '2026-09-23'
 
 
-def test_build_index_keeps_linked_players_with_games():
+def test_build_index_keeps_all_opponents_and_only_links_tier_by_id():
     import pytest
     from processors.eloboard_derived import compact_store
     from processors.staruniv_ranking import build_index
@@ -74,11 +74,14 @@ def test_build_index_keeps_linked_players_with_games():
                      'map_id': None, 'category_id': 0}],
     }
     tier_rows = [
-        {'elo_id': 1, 'nickname': '에이', 'soop_id': 's1', 'tier': '3', 'affiliation': 'A'},
+        {'elo_id': 1, 'nickname': '에이', 'soop_id': 's1', 'tier': '3', 'affiliation': 'A', 'race': 'P'},
         {'elo_id': 2, 'nickname': '비', 'soop_id': 's2', 'tier': '4', 'affiliation': 'B'},   # 경기 없음
         {'elo_id': None, 'nickname': '아이디없음', 'tier': '5'},
     ]
-    index = build_index(compact_store(source), tier_rows)
-    assert index == {'players': {'1': {'n': '에이', 'r': 'T', 'tm': 'A', 's': 's1', 't': '3'}}}
+    index = build_index(compact_store(source), tier_rows, include_unlisted=True)
+    assert index == {'players': {
+        '1': {'n': '에이', 'r': 'T', 'tm': 'A', 's': 's1', 't': '3'},
+        '3': {'n': 'c', 'r': 'P'},
+    }}
     with pytest.raises(RuntimeError):
         build_index(compact_store(source), [])

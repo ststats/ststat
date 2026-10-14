@@ -41,6 +41,7 @@ def _paged(table: str, select: str, order: str):
 def load_source_data():
     return {
         'categories': _paged('elo_categories', 'category_id,name', 'category_id'),
+        'maps': _paged('elo_maps', 'map_id,name', 'map_id'),
         'players': _paged('elo_players', 'elo_id,name,race', 'elo_id'),
         'matches': load_matches(),
         'tier_members': _paged(
@@ -182,7 +183,7 @@ def load_active_snapshot() -> dict | None:
 def snapshot_has_data(snapshot_id: str) -> bool:
     """활성 스냅샷에 통계가 실제로 있는지 본다. 백업 복구로 표만 비어 있으면 지문이 같아도 다시 계산해야 한다."""
     try:
-        for table in ('elo_ranking_meta', 'elo_rankings'):
+        for table in ('elo_ranking_meta', 'elo_rankings', 'elo_prediction_models'):
             rows = get_supabase().table(table).select('snapshot_id').eq(
                 'snapshot_id', snapshot_id).limit(1).execute().data or []
             if not rows:
@@ -236,6 +237,7 @@ def write_snapshot(snapshot_id: str, payload: dict) -> dict:
         'rankings': _insert('elo_rankings', payload['rankings'], snapshot_id),
         'player_ratings': _insert('elo_player_ratings', payload['player_ratings'], snapshot_id),
         'history': _insert('elo_rating_history', payload['rating_history'], snapshot_id),
+        'prediction': _insert('elo_prediction_models', [{'payload': payload['prediction_model']}], snapshot_id),
     }
     meta = dict(payload['ranking_meta'], snapshot_id=snapshot_id)
     get_supabase().table('elo_ranking_meta').insert(meta).execute()
