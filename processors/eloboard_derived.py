@@ -9,7 +9,7 @@ from processors.staruniv_prediction import build_prediction_model
 
 
 # 마감 월 이력 캐시 버전. 랭킹 모델·상수가 지난달 값을 바꾸면 올린다(다른 버전 캐시는 버린다).
-RANKING_HISTORY_CACHE_VERSION = 'ranking-original-v9'
+RANKING_HISTORY_CACHE_VERSION = 'ranking-2026-10-04-v7'
 
 
 def history_cache_metadata(source: dict) -> dict:

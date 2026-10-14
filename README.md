@@ -73,6 +73,8 @@ StarUniv 기본 표를 만드는 staruniv 저장소 `supabase/staruniv.sql`을 �
 - 최초 적용은 `supabase/migrations/*_separate_entry_prediction.sql` 또는 최신 통합 SQL 적용 →
   백엔드 배포 및 `calculate_eloboard_stats` 실행 → `joint-map-v1` 응답 확인 → 프런트 배포 순서입니다.
   모델이 없으면 프런트는 랭킹 점수로 임의의 승률을 만들지 않습니다.
+- 수집 없이 모델만 다시 계산할 때는 Actions의 `Rebuild EloBoard models`를 실행합니다.
+  정기 파이프라인과 같은 실행 잠금을 사용하며, 변경 없는 월별 랭킹 이력 캐시는 재사용합니다.
 
 
 - **EloBoard 요청 간격은 최소 2초**(운영자 요청). `ELOBOARD_DELAY`는 늘릴 수만 있고, 2초 미만이나 잘못된 값은
