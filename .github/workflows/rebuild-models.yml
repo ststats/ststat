@@ -6,7 +6,7 @@ on:
 permissions:
   contents: read
 
-# Regular collection and manual rebuild must not publish competing snapshots.
+# 정기 수집과 수동 재계산이 서로 다른 스냅샷을 동시에 게시하지 않게 같은 잠금을 쓴다.
 concurrency:
   group: ststat-main-pipeline
   cancel-in-progress: false

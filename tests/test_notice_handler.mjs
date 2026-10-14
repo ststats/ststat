@@ -34,7 +34,7 @@ function setup({ expired = false, cache = [], member = true, unavailable = false
   return { handler, calls, writes };
 }
 const request = query => new Request('https://test.supabase.co/functions/v1/member-notices?' + query);
-test('anonymous page 2 serves operator-authorized cookie notices without any secret fields', async () => {
+test('익명 2쪽 요청은 허락된 공지를 비밀 칸 없이 준다', async () => {
   const { handler, writes } = setup();
   const response = await handler(request('soop_id=alice&page=2'));
   assert.equal(response.status, 200);
@@ -45,18 +45,18 @@ test('anonymous page 2 serves operator-authorized cookie notices without any sec
   assert.equal(writes[0].page, 2);
   assert.doesNotMatch(JSON.stringify(body), /test-cookie|server-test-key|content.*encrypted/);
 });
-test('expired cookie falls back on the same requested public page', async () => {
+test('쿠키가 만료되면 같은 쪽의 공개 공지로 대신한다', async () => {
   const { handler, writes } = setup({ expired: true });
   const response = await handler(request('soop_id=alice&page=2'));
   assert.equal((await response.json()).posts[0].titleNo, 1);
   assert.equal(writes[0].payload.posts[0].titleNo, 1);
 });
-test('fresh cache avoids SOOP and cookie reads', async () => {
+test('캐시가 새것이면 SOOP과 쿠키를 읽지 않는다', async () => {
   const { handler, calls } = setup({ cache: [{ payload: { posts: [], totalPages: 3 }, fetched_at: new Date().toISOString() }] });
   assert.equal((await handler(request('soop_id=alice&page=2'))).status, 200);
   assert.equal(calls.length, 2);
 });
-test('personal first page reads only that member from the existing scan, without SOOP or bridge calls', async () => {
+test('개인 첫 쪽은 이미 모은 것에서 그 멤버 것만 읽고 SOOP·연결을 부르지 않는다', async () => {
   const { handler, calls } = setup({ firstPageRows: [{ post: { titleNo: 8, userId: 'alice' }, total_pages: 5 }] });
   const response = await handler(request('soop_id=alice&page=1'));
   assert.equal(response.status, 200);
@@ -66,7 +66,7 @@ test('personal first page reads only that member from the existing scan, without
   assert.equal(calls.length, 2);
   assert.equal(calls[1].url.searchParams.get('soop_id'), 'eq.alice');
 });
-test('validation and roster membership prevent arbitrary proxy requests', async () => {
+test('입력 검사와 멤버 확인으로 아무 주소나 대신 읽지 못하게 막는다', async () => {
   const { handler, calls } = setup({ member: false });
   for (const query of ['soop_id=evil.test&page=1', 'soop_id=alice&page=0', 'soop_id=alice&page=1001', 'soop_id=alice&page=1.5'])
     assert.equal((await handler(request(query))).status, 400);
@@ -74,7 +74,7 @@ test('validation and roster membership prevent arbitrary proxy requests', async 
   assert.equal((await handler(request('soop_id=alice&page=2'))).status, 404);
   assert.equal(calls.length, 1);
 });
-test('both upstream failures expose only generic errors and never cache failure', async () => {
+test('양쪽 다 실패하면 일반 오류만 알리고 실패는 캐시하지 않는다', async () => {
   const { handler, writes } = setup({ unavailable: true });
   const response = await handler(request('soop_id=alice&page=2'));
   assert.equal(response.status, 503);

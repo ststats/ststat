@@ -232,9 +232,9 @@ async function refreshMemberPosts(force = false) {
   if (!force && Date.now() - (await lastPostsScanMs()) < POSTS_EVERY_MS) return { skipped: true };
   const ids = await loadActiveMemberIds();
   if (ids.length === 0) throw new Error("활동 멤버가 없습니다.");
-  // Production uses the authenticated badges bridge; direct-key mode is optional.
+  // 운영은 인증된 badges 연결을 쓴다. 키를 직접 넣는 방식은 선택이다.
   const scan = await collectMemberPosts(ids, {
-    // The operator explicitly selected public publication of collected notices.
+    // 수집한 공지를 공개 게시하는 것은 운영자가 직접 정했다.
     allowFavorites: true,
     cookieKey: Deno.env.get("BADGES_COOKIE_KEY") || "",
     supabaseUrl: SUPABASE_URL,

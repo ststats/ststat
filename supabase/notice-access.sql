@@ -1,4 +1,4 @@
--- Server-owned page cache for operator-authorized public notice publication.
+-- 운영자가 허락한 공지 공개 게시용 쪽 캐시(서버만 쓴다).
 create table if not exists public.notice_public_pages (
   soop_id text not null,
   page integer not null check (page between 1 and 1000),

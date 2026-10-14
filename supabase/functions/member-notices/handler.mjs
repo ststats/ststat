@@ -28,12 +28,12 @@ export function createNoticeHandler({ supabaseUrl, serviceKey, cookieKey = '', f
     if (!/^[a-z0-9_]{1,50}$/.test(id) || !Number.isSafeInteger(page) || page < 1 || page > 1000)
       return reply({ error: 'Invalid notice page' }, 400);
     try {
-      // Restrict collection to the existing active roster; callers cannot use this as a general proxy.
+      // 지금 활동 중인 멤버만 받는다. 아무 주소나 대신 읽어 주는 용도로 쓸 수 없게.
       const members = await db('members?select=soop_id&left_date=is.null&soop_id=eq.' + encodeURIComponent(id) + '&limit=1');
       if (!members.length) return reply({ error: 'Member not found' }, 404);
       if (page === 1) {
-        // First pages are already collected by live-status. Return this member
-        // only instead of making the browser download the entire roster's feed.
+        // 첫 쪽은 live-status가 이미 모아 둔다. 브라우저가 전체 멤버 글을 받지 않게
+        // 이 멤버 것만 돌려준다.
         const rows = await db('member_posts?select=post,total_pages&soop_id=eq.' + encodeURIComponent(id) + '&order=reg_date.desc');
         if (rows.length) return reply({ posts: rows.map(row => row.post), totalPages: Number(rows[0].total_pages) || 1 });
       }

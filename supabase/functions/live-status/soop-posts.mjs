@@ -1,4 +1,4 @@
-// Shared SOOP notice reader. No login credential is stored in member_posts, logs or browser.
+// SOOP 공지 공용 읽기. 로그인 정보는 member_posts·로그·브라우저 어디에도 남기지 않는다.
 // Mirrors ststats/badges/src/live.mjs: base64(IV[12] || GCM tag[16] || ciphertext)
 // with AES-256-GCM and SHA-256(COOKIE_KEY).
 
@@ -16,7 +16,7 @@ export function boardApiUrl(soopId, page = 1, host = SOOP_HOSTS[0], perPage = 10
   return 'https://' + host + '/v1.1/channel/' + encodeURIComponent(soopId) + '/board?' + params;
 }
 
-// Preserve the existing member_posts JSON contract; include pinned notices and deduplicate.
+// 기존 member_posts JSON 모양을 지킨다. 고정 공지도 넣고 겹치는 글은 한 번만.
 export function ownPosts(board, soopId) {
   const owner = String(soopId).toLowerCase();
   const all = [...(Array.isArray(board?.contents) ? board.contents : []),
@@ -46,7 +46,7 @@ export async function decryptBadgeCookie(ciphertext, secret, cryptoApi = globalT
   const encrypted = bytes.slice(28);
   const keyHash = await cryptoApi.subtle.digest('SHA-256', new TextEncoder().encode(secret));
   const key = await cryptoApi.subtle.importKey('raw', keyHash, { name: 'AES-GCM' }, false, ['decrypt']);
-  // Web Crypto expects ciphertext || tag; Node badges stores tag before ciphertext.
+  // Web Crypto는 암호문 뒤에 태그를 기대하고, badges(Node)는 태그를 암호문 앞에 저장한다.
   const joined = new Uint8Array(encrypted.length + tag.length);
   joined.set(encrypted);
   joined.set(tag, encrypted.length);
@@ -56,7 +56,7 @@ export async function decryptBadgeCookie(ciphertext, secret, cryptoApi = globalT
   return cookie;
 }
 
-// Direct RLS-protected table read using service_role. Never use public badge_get for credentials.
+// RLS로 막힌 표를 service_role로 직접 읽는다. 로그인 정보는 공개 함수로 읽지 않는다.
 export async function loadBadgeCookie({ supabaseUrl, serviceKey, secret, fetcher = fetch, cryptoApi = globalThis.crypto }) {
   if (!/^https:\/\//.test(supabaseUrl) || !serviceKey) throw new Error('Cookie source unavailable');
   const endpoint = new URL('/rest/v1/badge_files', supabaseUrl);
@@ -74,8 +74,8 @@ export async function loadBadgeCookie({ supabaseUrl, serviceKey, secret, fetcher
   return decryptBadgeCookie(rows[0].content, secret, cryptoApi);
 }
 
-// Authenticated reads retry the two allowlisted SOOP hosts used by badges.
-// A caller can retry without a cookie on failure (and discard inaccessible posts).
+// 로그인 읽기는 badges가 쓰는 허용된 SOOP 주소 두 곳을 차례로 시도한다.
+// 실패하면 부르는 쪽이 쿠키 없이 다시 읽을 수 있다(볼 수 없게 된 글은 버린다).
 export async function fetchSoopBoard(soopId, { cookie = '', page = 1, perPage = 10, fetcher = fetch, timeoutMs = 8000 } = {}) {
   const hosts = cookie ? SOOP_HOSTS : SOOP_HOSTS.slice(0, 1);
   for (const host of hosts) {
@@ -97,8 +97,8 @@ export async function fetchSoopBoard(soopId, { cookie = '', page = 1, perPage = 
   throw new Error('SOOP board unavailable');
 }
 
-// Read the latest badges cookie on every collection, without duplicating its storage.
-// Restricted posts are only republished after an explicit operator opt-in.
+// 수집할 때마다 badges의 최신 쿠키를 읽는다(쿠키를 따로 복사해 두지 않는다).
+// 공개 범위가 제한된 글은 운영자가 명시적으로 허락했을 때만 다시 게시한다.
 export async function collectMemberPosts(ids, {
   allowFavorites = false, cookieKey = '', supabaseUrl = '', serviceKey = '',
   fetcher = fetch, concurrency = 6, timeoutMs = 8000, page = 1,
@@ -108,8 +108,8 @@ export async function collectMemberPosts(ids, {
   let cookieStatus = 'disabled';
   if (allowFavorites) {
     if (cookieKey.length < 16) {
-      // Vercel Secret values cannot be read back. Use its existing decrypting
-      // server without transferring the SOOP cookie or encryption key.
+      // Vercel 비밀값은 다시 읽을 수 없다. SOOP 쿠키나 암호화 키를 옮기지 않고
+      // 이미 복호화할 수 있는 badges 서버를 쓴다.
       cookieStatus = 'bridge_unavailable';
       try {
         const response = await fetcher(new URL('/rest/v1/rpc/badge_notice_bridge_secret', supabaseUrl), {
@@ -164,7 +164,7 @@ export async function collectMemberPosts(ids, {
       }
       if (!found) found = await fetchSoopBoard(id, { cookie, page, fetcher, timeoutMs }).catch(() => null);
       if (!found && cookie) {
-        // Never continue publishing stale private posts after credential rejection.
+        // 로그인 정보가 거절되면 예전에 받은 비공개 글을 계속 게시하지 않는다.
         fallbackMembers++;
         found = await fetchSoopBoard(id, { page, fetcher, timeoutMs }).catch(() => null);
       }

@@ -10,19 +10,19 @@ function encrypt(text) {
 }
 const json = x => new Response(JSON.stringify(x));
 const board = () => ({ contents: [{ titleNo: 1, userId: 'alice', regDate: '2026-10-12 10:00:00' }], noticeData: [{ titleNo: 1, userId: 'alice' }, { titleNo: 2, userId: 'alice' }, { titleNo: 3, userId: 'other' }], meta: { totalPages: 2 } });
-test('Node badges AES-256-GCM envelope is compatible with Edge Web Crypto', async () => {
+test('badges(Node)의 AES-256-GCM 암호문을 Edge Web Crypto가 푼다', async () => {
   const encrypted = encrypt('PdboxTicket=example');
   assert.equal(await decryptBadgeCookie(encrypted, key), 'PdboxTicket=example');
   await assert.rejects(decryptBadgeCookie(encrypted, 'wrong-long-enough-key-value'));
   const bad = Buffer.from(encrypted, 'base64'); bad[30] ^= 1;
   await assert.rejects(decryptBadgeCookie(bad.toString('base64'), key));
 });
-test('matching posts from contents and noticeData deduplicate; outsiders excluded', () => {
+test('contents와 noticeData의 같은 글은 한 번만, 다른 사람 글은 뺀다', () => {
   assert.deepEqual(ownPosts(board(), 'ALICE').map(p => p.titleNo), [1, 2]);
   assert.equal(new URL(boardApiUrl('alice')).searchParams.get('type'), 'all');
   assert.throws(() => boardApiUrl('https://evil.test'));
 });
-test('public-only default never reads saved cookie or forwards it', async () => {
+test('기본(공개 글만)은 저장된 쿠키를 읽지도 보내지도 않는다', async () => {
   const urls = [];
   const scan = await collectMemberPosts(['alice'], { supabaseUrl: 'https://demo.supabase.co', serviceKey: 'test', cookieKey: key, fetcher: async (url, opts) => {
     urls.push([url, opts.headers]); return json(board());
@@ -31,7 +31,7 @@ test('public-only default never reads saved cookie or forwards it', async () => 
   assert.equal(urls.length, 1);
   assert.equal('Cookie' in urls[0][1], false);
 });
-test('opted-in new badge cookie takes effect next scan; service role only', async () => {
+test('허락하면 새 badges 쿠키가 다음 수집부터 쓰이고, service role로만 읽는다', async () => {
   let current = encrypt('PdboxTicket=first');
   const headers = [];
   const fetcher = async (url, opts) => {
@@ -46,7 +46,7 @@ test('opted-in new badge cookie takes effect next scan; service role only', asyn
   await collectMemberPosts(['alice'], options);
   assert.equal(headers[3].Cookie, 'PdboxTicket=second');
 });
-test('wrong decryption key falls back to public notices without sending a cookie', async () => {
+test('복호화 키가 틀리면 쿠키를 보내지 않고 공개 공지로 대신한다', async () => {
   const boardHeaders = [];
   const scan = await collectMemberPosts(['alice'], { allowFavorites:true, supabaseUrl:'https://demo.supabase.co', serviceKey:'service-secret', cookieKey:'wrong-but-long-enough-key', fetcher: async (url, opts) => {
     if (url.includes('/badge_files')) return json([{content:encrypt('secret=sample')}]);
@@ -56,7 +56,7 @@ test('wrong decryption key falls back to public notices without sending a cookie
   assert.ok(boardHeaders.every(h => !('Cookie' in h)));
   assert.equal(scan.results.length, 1);
 });
-test('expired cookie retries public collection and removes access-dependent notices', async () => {
+test('쿠키가 만료되면 공개로 다시 수집하고 로그인해야 보이는 공지는 지운다', async () => {
   const scan = await collectMemberPosts(['alice'], { allowFavorites:true, supabaseUrl:'https://demo.supabase.co', serviceKey:'service-secret', cookieKey:key, fetcher: async (url, opts) => {
     if (url.includes('/badge_files')) return json([{content:encrypt('PdboxTicket=expired')}]);
     return opts.headers.Cookie ? new Response('blocked', {status:500}) : json({contents:[{titleNo:1,userId:'alice'}],noticeData:[],meta:{totalPages:1}});
@@ -65,7 +65,7 @@ test('expired cookie retries public collection and removes access-dependent noti
   assert.deepEqual(scan.results[0].posts.map(p=>p.titleNo), [1]);
 });
 
-test('non-readable Vercel key uses authenticated notice bridge, never transfers SOOP credentials', async () => {
+test('Vercel 키를 못 읽으면 인증된 공지 연결을 쓰고 SOOP 로그인 정보는 옮기지 않는다', async () => {
   const calls = [];
   const scan = await collectMemberPosts(['alice'], { allowFavorites: true, supabaseUrl: 'https://demo.supabase.co', serviceKey: 'server-key', page: 2,
     fetcher: async (input, options) => {
@@ -88,7 +88,7 @@ test('non-readable Vercel key uses authenticated notice bridge, never transfers 
   assert.equal(calls.length, 2);
   assert.doesNotMatch(JSON.stringify(scan), /server-key|test-only-bridge-secret|strip/);
 });
-test('bridge authentication or deployment failure falls back to the requested public page', async () => {
+test('연결 인증·배포가 실패하면 요청한 공개 쪽으로 대신한다', async () => {
   const scan = await collectMemberPosts(['alice'], { allowFavorites: true, supabaseUrl: 'https://demo.supabase.co', serviceKey: 'server-key', page: 2,
     fetcher: async (input, options) => {
       const url = new URL(input);
