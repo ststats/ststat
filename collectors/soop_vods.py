@@ -41,9 +41,10 @@ def parse_vod(item: dict) -> dict | None:
     count = item.get("count") if isinstance(item.get("count"), dict) else {}
     duration_ms = _int(ucc.get("total_file_duration"))
     return {
-        "title_no": title_no,
+        "video_id": str(title_no),
         "title": title,
-        "reg_date": reg_date,
+        # SOOP 시각은 한국 시간이다
+        "published": reg_date.replace(" ", "T") + "+09:00",
         "thumb": _thumb(ucc.get("thumb")),
         "duration_sec": duration_ms // 1000 if duration_ms is not None else None,
         "views": _int(count.get("read_cnt")),

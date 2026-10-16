@@ -78,7 +78,7 @@ def test_anon_reads_no_table_or_view():
     assert grants == {}
     assert not re.search(r"grant select[^;]* to anon", SQL)
     for fn_only in ("daily_member_stats", "synergy_daily_dates", "live_broadcasts",
-                    "member_posts", "member_vods", "elo_ranking_meta", "elo_rating_history",
+                    "member_posts", "member_videos", "elo_ranking_meta", "elo_rating_history",
                     "elo_public_players", "elo_public_matches", "elo_rankings", "elo_player_ratings"):
         assert fn_only not in grants, fn_only
         assert f"public.{fn_only}" in contract.split("from anon;", 1)[0], fn_only
@@ -142,7 +142,7 @@ def test_public_api_functions_keep_the_same_filters_as_table_policies():
     block = _block("-- 공개 읽기 함수(/api/v1): StarUniv", "to anon, authenticated;")
     names = re.findall(r"create or replace function public\.(api_\w+)\(", block)
     assert set(names) == {"api_university_logos", "api_daily_stats", "api_live", "api_live_ids", "api_stats_dates", "api_member_posts",
-                          "api_recent_posts", "api_member_vods", "api_elo_rating_range", "api_elo_rating_history", "api_elo_ranking_meta"}
+                          "api_recent_posts", "api_member_videos", "api_elo_rating_range", "api_elo_rating_history", "api_elo_ranking_meta"}
     assert block.count("security definer set search_path = public") == len(names)
     grant = block[block.index("grant execute on function"):]
     for name in names:
@@ -177,11 +177,11 @@ def test_daily_publish_keeps_viewership_so_republishing_does_not_drop_it():
     assert "viewership_seconds" in DAILY_SNAPSHOT_COLUMNS.split(",")
 
 
-def test_member_vods_are_read_only_through_public_function():
-    assert "create table if not exists public.member_vods" in SQL
-    assert "revoke all on function public.replace_member_vods(jsonb, text[], text[]) from public, anon, authenticated;" in SQL
-    assert "grant execute on function public.replace_member_vods(jsonb, text[], text[]) to service_role;" in SQL
-    fn = SQL[SQL.index("create or replace function public.api_member_vods"):]
+def test_member_videos_are_read_only_through_public_function():
+    assert "create table if not exists public.member_videos" in SQL
+    assert "revoke all on function public.replace_member_videos(text, jsonb, text[], text[]) from public, anon, authenticated;" in SQL
+    assert "grant execute on function public.replace_member_videos(text, jsonb, text[], text[]) to service_role;" in SQL
+    fn = SQL[SQL.index("create or replace function public.api_member_videos"):]
     fn = fn[:fn.index("$$;")]
-    # 퇴단 멤버의 다시보기는 공개하지 않는다
-    assert "s.left_date is null" in fn and "limit 20" in fn
+    # 퇴단 멤버의 영상은 공개하지 않고, 종류(숲 다시보기·유튜브)를 섞지 않는다
+    assert "s.left_date is null" in fn and "m.kind = p_kind" in fn and "limit 20" in fn

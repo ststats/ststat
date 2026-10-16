@@ -26,7 +26,7 @@ def test_roster_sync_does_not_own_existing_member_columns():
 def test_pipeline_retries_idempotent_jobs_once_but_not_eloboard():
     from pathlib import Path
     wf = Path(".github/workflows/pipeline.yml").read_text(encoding="utf-8")
-    for job in ("healthcheck", "calculate_eloboard_stats", "sync_synergy_daily", "sync_videos", "sync_member_vods", "audit_match_rounds"):
+    for job in ("healthcheck", "calculate_eloboard_stats", "sync_synergy_daily", "sync_videos", "sync_member_videos", "audit_match_rounds"):
         assert f"run: bash scripts/retry_job.sh {job}" in wf
     assert "run: python scripts/run_job.py sync_eloboard" in wf
     assert "retry_job.sh sync_eloboard" not in wf

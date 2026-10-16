@@ -939,7 +939,7 @@ $cron$);
 
 
 -- ############################################################################
--- 13. 멤버 공지 모음(member_posts)·다시보기(member_vods)
+-- 13. 멤버 공지 모음(member_posts)·영상(member_videos)
 -- ############################################################################
 -- 활동 멤버의 본인 글 첫 쪽을 live-status가 2분마다 채운다. 이후 쪽은 member-notices 서버가 읽는다.
 -- reg_date는 SOOP 문자열("YYYY-MM-DD HH:MM:SS", KST) 그대로라 글자순이 곧 시간순이다.
@@ -1007,25 +1007,27 @@ $$;
 revoke all on function public.replace_member_posts(jsonb, text[], text[]) from public, anon, authenticated;
 grant execute on function public.replace_member_posts(jsonb, text[], text[]) to service_role;
 
--- 활동 멤버의 SOOP 다시보기 최근 20개를 sync_member_vods가 파이프라인마다 채운다. 영상 탭 '다시보기'가 읽는다.
-create table if not exists public.member_vods (
+-- 활동 멤버의 숲 다시보기(kind soop)·유튜브(kind youtube, 쇼츠 포함) 최근 20개씩. sync_member_videos가 파이프라인마다 채운다.
+create table if not exists public.member_videos (
+  kind text not null check (kind in ('soop', 'youtube')),
   soop_id text not null,
-  title_no bigint not null,
+  video_id text not null,
   title text not null,
-  reg_date text,
+  published timestamptz,
   thumb text,
   duration_sec integer,
-  views integer,
+  views bigint,
+  short boolean not null default false,
   scanned_at timestamptz not null default now(),
-  primary key (soop_id, title_no)
+  primary key (kind, soop_id, video_id)
 );
-create index if not exists member_vods_reg_date_idx on public.member_vods (reg_date desc);
+create index if not exists member_videos_published_idx on public.member_videos (kind, published desc);
 
-alter table public.member_vods enable row level security;
-grant select, insert, update, delete on table public.member_vods to service_role;
+alter table public.member_videos enable row level security;
+grant select, insert, update, delete on table public.member_videos to service_role;
 
--- 공지와 같은 규칙: 달라진 행만 쓰고, 받은 멤버의 목록에서 사라진 것과 활동 명단에서 빠진 멤버의 것만 지운다.
-create or replace function public.replace_member_vods(p_rows jsonb, p_scanned text[], p_active text[])
+-- 공지와 같은 규칙: 달라진 행만 쓰고, 받은 멤버의 목록에서 사라진 것과 대상 명단(p_active)에서 빠진 멤버의 것만 지운다.
+create or replace function public.replace_member_videos(p_kind text, p_rows jsonb, p_scanned text[], p_active text[])
 returns integer
 language plpgsql
 security definer
@@ -1035,34 +1037,36 @@ declare
   n_del integer;
   n_up integer;
 begin
-  drop table if exists _mv_new;
-  create temp table _mv_new on commit drop as
-  select r.soop_id, r.title_no, r.title, r.reg_date, r.thumb, r.duration_sec, r.views
+  if p_kind is null or p_kind not in ('soop', 'youtube') then raise exception 'invalid kind'; end if;
+  drop table if exists _mvid_new;
+  create temp table _mvid_new on commit drop as
+  select lower(r.soop_id) as soop_id, r.video_id, r.title, r.published, r.thumb, r.duration_sec, r.views, coalesce(r.short, false) as short
   from jsonb_to_recordset(coalesce(p_rows, '[]'::jsonb)) as r(
-    soop_id text, title_no bigint, title text, reg_date text, thumb text, duration_sec integer, views integer)
-  where coalesce(r.soop_id, '') <> '' and r.title_no is not null and coalesce(r.title, '') <> '';
+    soop_id text, video_id text, title text, published timestamptz, thumb text, duration_sec integer, views bigint, short boolean)
+  where coalesce(r.soop_id, '') <> '' and coalesce(r.video_id, '') <> '' and coalesce(r.title, '') <> '';
 
-  delete from public.member_vods m
-   where not (lower(m.soop_id) = any (select lower(x) from unnest(coalesce(p_active, '{}')) x))
-      or (lower(m.soop_id) = any (select lower(x) from unnest(coalesce(p_scanned, '{}')) x)
-          and not exists (select 1 from _mv_new n where lower(n.soop_id) = lower(m.soop_id) and n.title_no = m.title_no));
+  delete from public.member_videos m
+   where m.kind = p_kind
+     and (not (m.soop_id = any (select lower(x) from unnest(coalesce(p_active, '{}')) x))
+          or (m.soop_id = any (select lower(x) from unnest(coalesce(p_scanned, '{}')) x)
+              and not exists (select 1 from _mvid_new n where n.soop_id = m.soop_id and n.video_id = m.video_id)));
   get diagnostics n_del = row_count;
 
-  insert into public.member_vods as m (soop_id, title_no, title, reg_date, thumb, duration_sec, views, scanned_at)
-  select distinct on (n.soop_id, n.title_no) n.soop_id, n.title_no, n.title, n.reg_date, n.thumb, n.duration_sec, n.views, now()
-  from _mv_new n
-  on conflict (soop_id, title_no) do update
-    set title = excluded.title, reg_date = excluded.reg_date, thumb = excluded.thumb,
-        duration_sec = excluded.duration_sec, views = excluded.views, scanned_at = now()
-    where (m.title, m.reg_date, m.thumb, m.duration_sec, m.views)
-      is distinct from (excluded.title, excluded.reg_date, excluded.thumb, excluded.duration_sec, excluded.views);
+  insert into public.member_videos as m (kind, soop_id, video_id, title, published, thumb, duration_sec, views, short, scanned_at)
+  select distinct on (n.soop_id, n.video_id) p_kind, n.soop_id, n.video_id, n.title, n.published, n.thumb, n.duration_sec, n.views, n.short, now()
+  from _mvid_new n
+  on conflict (kind, soop_id, video_id) do update
+    set title = excluded.title, published = excluded.published, thumb = excluded.thumb,
+        duration_sec = excluded.duration_sec, views = excluded.views, short = excluded.short, scanned_at = now()
+    where (m.title, m.published, m.thumb, m.duration_sec, m.views, m.short)
+      is distinct from (excluded.title, excluded.published, excluded.thumb, excluded.duration_sec, excluded.views, excluded.short);
   get diagnostics n_up = row_count;
   return n_del + n_up;
 end;
 $$;
 
-revoke all on function public.replace_member_vods(jsonb, text[], text[]) from public, anon, authenticated;
-grant execute on function public.replace_member_vods(jsonb, text[], text[]) to service_role;
+revoke all on function public.replace_member_videos(text, jsonb, text[], text[]) from public, anon, authenticated;
+grant execute on function public.replace_member_videos(text, jsonb, text[], text[]) to service_role;
 
 
 -- ############################################################################
@@ -1075,7 +1079,7 @@ revoke all on public.elo_derived_snapshots, public.elo_player_stats,
   public.elo_player_matches, public.elo_public_players, public.elo_public_matches,
   public.elo_players, public.elo_matches, public.elo_maps, public.elo_categories,
   public.daily_member_stats, public.synergy_daily_dates,
-  public.poonggo_monthly_stats, public.synergy_month_confirmations, public.live_broadcasts, public.live_scan_state, public.member_posts, public.member_vods,
+  public.poonggo_monthly_stats, public.synergy_month_confirmations, public.live_broadcasts, public.live_scan_state, public.member_posts, public.member_videos,
   public.rounds_effective, public.sync_jobs from anon;
 
 -- 대학 로고는 어느 화면에든 나오는 대학만. 표는 staruniv.sql 6번.
@@ -1166,16 +1170,17 @@ language sql stable security definer set search_path = public as $$
         limit least(greatest(coalesce(p_limit, 6), 1), 50)) p;
 $$;
 
--- 멤버 다시보기: 한 멤버(비우면 전체)의 최신 20개. 활동 멤버만
-create or replace function public.api_member_vods(p_soop_id text default null) returns json
+-- 멤버 영상(p_kind soop 다시보기 | youtube): 한 멤버(비우면 전체)의 최신 20개. 활동 멤버만
+create or replace function public.api_member_videos(p_kind text, p_soop_id text default null) returns json
 language sql stable security definer set search_path = public as $$
-  select coalesce(json_agg(json_build_object('soop_id', v.soop_id, 'title_no', v.title_no, 'title', v.title,
-      'reg_date', v.reg_date, 'thumb', v.thumb, 'duration_sec', v.duration_sec, 'views', v.views)
-      order by v.reg_date desc, v.title_no desc), '[]'::json)
-  from (select * from public.member_vods m
-        where (p_soop_id is null or lower(m.soop_id) = lower(p_soop_id))
-          and exists (select 1 from public.members s where lower(s.soop_id) = lower(m.soop_id) and s.left_date is null)
-        order by m.reg_date desc, m.title_no desc limit 20) v;
+  select coalesce(json_agg(json_build_object('soop_id', v.soop_id, 'video_id', v.video_id, 'title', v.title,
+      'published', v.published, 'thumb', v.thumb, 'duration_sec', v.duration_sec, 'views', v.views, 'short', v.short)
+      order by v.published desc nulls last, v.video_id desc), '[]'::json)
+  from (select * from public.member_videos m
+        where m.kind = p_kind
+          and (p_soop_id is null or m.soop_id = lower(p_soop_id))
+          and exists (select 1 from public.members s where lower(s.soop_id) = m.soop_id and s.left_date is null)
+        order by m.published desc nulls last, m.video_id desc limit 20) v;
 $$;
 
 -- ELO 레이팅 기록이 있는 첫 달·마지막 달(활성 스냅샷)
@@ -1204,10 +1209,10 @@ language sql stable security definer set search_path = public as $$
 $$;
 
 revoke all on function public.api_university_logos(jsonb), public.api_daily_stats(date, boolean), public.api_live(), public.api_live_ids(),
-  public.api_stats_dates(), public.api_member_posts(), public.api_recent_posts(integer), public.api_member_vods(text),
+  public.api_stats_dates(), public.api_member_posts(), public.api_recent_posts(integer), public.api_member_videos(text, text),
   public.api_elo_rating_range(), public.api_elo_rating_history(integer), public.api_elo_ranking_meta() from public;
 grant execute on function public.api_university_logos(jsonb), public.api_daily_stats(date, boolean), public.api_live(), public.api_live_ids(),
-  public.api_stats_dates(), public.api_member_posts(), public.api_recent_posts(integer), public.api_member_vods(text),
+  public.api_stats_dates(), public.api_member_posts(), public.api_recent_posts(integer), public.api_member_videos(text, text),
   public.api_elo_rating_range(), public.api_elo_rating_history(integer), public.api_elo_ranking_meta() to anon, authenticated;
 
 -- 긴 목록을 요청 한 번에 {"c": [열 이름], "r": [[값, …], …]}로 준다(StarUniv api.js가 객체 배열로 바꾼다).

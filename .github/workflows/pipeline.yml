@@ -103,10 +103,12 @@ jobs:
       - run: pip install -r requirements.txt
       - run: bash scripts/retry_job.sh sync_videos
 
-  member_vods:
+  member_videos:
     needs: test
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
+    env:
+      YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -114,7 +116,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -r requirements.txt
-      - run: bash scripts/retry_job.sh sync_member_vods
+      - run: bash scripts/retry_job.sh sync_member_videos
 
   audit:
     needs: test
