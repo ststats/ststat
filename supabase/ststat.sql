@@ -1013,7 +1013,7 @@ create table if not exists public.member_videos (
   soop_id text not null,
   video_id text not null,
   title text not null,
-  published timestamptz,
+  published timestamptz not null,
   thumb text,
   duration_sec integer,
   views bigint,
@@ -1021,6 +1021,9 @@ create table if not exists public.member_videos (
   scanned_at timestamptz not null default now(),
   primary key (kind, soop_id, video_id)
 );
+-- 처음 만든 표에는 published가 비어도 됐다
+delete from public.member_videos where published is null;
+alter table public.member_videos alter column published set not null;
 create index if not exists member_videos_published_idx on public.member_videos (kind, published desc);
 
 alter table public.member_videos enable row level security;
@@ -1043,7 +1046,7 @@ begin
   select lower(r.soop_id) as soop_id, r.video_id, r.title, r.published, r.thumb, r.duration_sec, r.views, coalesce(r.short, false) as short
   from jsonb_to_recordset(coalesce(p_rows, '[]'::jsonb)) as r(
     soop_id text, video_id text, title text, published timestamptz, thumb text, duration_sec integer, views bigint, short boolean)
-  where coalesce(r.soop_id, '') <> '' and coalesce(r.video_id, '') <> '' and coalesce(r.title, '') <> '';
+  where coalesce(r.soop_id, '') <> '' and coalesce(r.video_id, '') <> '' and coalesce(r.title, '') <> '' and r.published is not null;
 
   delete from public.member_videos m
    where m.kind = p_kind
@@ -1170,17 +1173,21 @@ language sql stable security definer set search_path = public as $$
         limit least(greatest(coalesce(p_limit, 6), 1), 50)) p;
 $$;
 
--- 멤버 영상(p_kind soop 다시보기 | youtube): 한 멤버(비우면 전체)의 최신 20개. 활동 멤버만
-create or replace function public.api_member_videos(p_kind text, p_soop_id text default null) returns json
+-- 멤버 영상(p_kind soop 다시보기 | youtube): 한 멤버(비우면 전체)의 최신 20개. 활동 멤버만.
+-- 전체는 더 보기로 이어 받는다(직전 쪽 마지막 영상의 published·video_id).
+drop function if exists public.api_member_videos(text, text);
+create or replace function public.api_member_videos(p_kind text, p_soop_id text default null,
+  p_before timestamptz default null, p_before_id text default null) returns json
 language sql stable security definer set search_path = public as $$
   select coalesce(json_agg(json_build_object('soop_id', v.soop_id, 'video_id', v.video_id, 'title', v.title,
       'published', v.published, 'thumb', v.thumb, 'duration_sec', v.duration_sec, 'views', v.views, 'short', v.short)
-      order by v.published desc nulls last, v.video_id desc), '[]'::json)
+      order by v.published desc, v.video_id desc), '[]'::json)
   from (select * from public.member_videos m
         where m.kind = p_kind
           and (p_soop_id is null or m.soop_id = lower(p_soop_id))
+          and (p_before is null or (m.published, m.video_id) < (p_before, coalesce(p_before_id, '')))
           and exists (select 1 from public.members s where lower(s.soop_id) = m.soop_id and s.left_date is null)
-        order by m.published desc nulls last, m.video_id desc limit 20) v;
+        order by m.published desc, m.video_id desc limit 20) v;
 $$;
 
 -- ELO 레이팅 기록이 있는 첫 달·마지막 달(활성 스냅샷)
@@ -1209,10 +1216,10 @@ language sql stable security definer set search_path = public as $$
 $$;
 
 revoke all on function public.api_university_logos(jsonb), public.api_daily_stats(date, boolean), public.api_live(), public.api_live_ids(),
-  public.api_stats_dates(), public.api_member_posts(), public.api_recent_posts(integer), public.api_member_videos(text, text),
+  public.api_stats_dates(), public.api_member_posts(), public.api_recent_posts(integer), public.api_member_videos(text, text, timestamptz, text),
   public.api_elo_rating_range(), public.api_elo_rating_history(integer), public.api_elo_ranking_meta() from public;
 grant execute on function public.api_university_logos(jsonb), public.api_daily_stats(date, boolean), public.api_live(), public.api_live_ids(),
-  public.api_stats_dates(), public.api_member_posts(), public.api_recent_posts(integer), public.api_member_videos(text, text),
+  public.api_stats_dates(), public.api_member_posts(), public.api_recent_posts(integer), public.api_member_videos(text, text, timestamptz, text),
   public.api_elo_rating_range(), public.api_elo_rating_history(integer), public.api_elo_ranking_meta() to anon, authenticated;
 
 -- 긴 목록을 요청 한 번에 {"c": [열 이름], "r": [[값, …], …]}로 준다(StarUniv api.js가 객체 배열로 바꾼다).
