@@ -1173,21 +1173,26 @@ language sql stable security definer set search_path = public as $$
         limit least(greatest(coalesce(p_limit, 6), 1), 50)) p;
 $$;
 
--- 멤버 영상(p_kind soop 다시보기 | youtube): 한 멤버(비우면 전체)의 최신 20개. 활동 멤버만.
+-- 멤버 영상(p_kind soop 다시보기 | youtube): 한 멤버(비우면 전체)의 최신 20개와 전체 개수. 활동 멤버만.
 -- 전체는 더 보기로 이어 받는다(직전 쪽 마지막 영상의 published·video_id).
 drop function if exists public.api_member_videos(text, text);
 create or replace function public.api_member_videos(p_kind text, p_soop_id text default null,
   p_before timestamptz default null, p_before_id text default null) returns json
 language sql stable security definer set search_path = public as $$
-  select coalesce(json_agg(json_build_object('soop_id', v.soop_id, 'video_id', v.video_id, 'title', v.title,
-      'published', v.published, 'thumb', v.thumb, 'duration_sec', v.duration_sec, 'views', v.views, 'short', v.short)
-      order by v.published desc, v.video_id desc), '[]'::json)
-  from (select * from public.member_videos m
-        where m.kind = p_kind
-          and (p_soop_id is null or m.soop_id = lower(p_soop_id))
-          and (p_before is null or (m.published, m.video_id) < (p_before, coalesce(p_before_id, '')))
-          and exists (select 1 from public.members s where lower(s.soop_id) = m.soop_id and s.left_date is null)
-        order by m.published desc, m.video_id desc limit 20) v;
+  with shown as (
+    select * from public.member_videos m
+    where m.kind = p_kind
+      and (p_soop_id is null or m.soop_id = lower(p_soop_id))
+      and exists (select 1 from public.members s where lower(s.soop_id) = m.soop_id and s.left_date is null)
+  ), page as (
+    select * from shown
+    where p_before is null or (published, video_id) < (p_before, coalesce(p_before_id, ''))
+    order by published desc, video_id desc limit 20
+  )
+  select json_build_object('total', (select count(*) from shown), 'videos', coalesce(
+    (select json_agg(json_build_object('soop_id', v.soop_id, 'video_id', v.video_id, 'title', v.title,
+        'published', v.published, 'thumb', v.thumb, 'duration_sec', v.duration_sec, 'views', v.views, 'short', v.short)
+        order by v.published desc, v.video_id desc) from page v), '[]'::json));
 $$;
 
 -- ELO 레이팅 기록이 있는 첫 달·마지막 달(활성 스냅샷)
