@@ -100,3 +100,16 @@ def test_job_fails_but_keeps_the_kind_that_could_not_be_read(monkeypatch):
     with pytest.raises(RuntimeError, match="soop 2명 중 2명을 받지 못해"):
         job.run()
     assert written == ["youtube"]
+
+
+@pytest.mark.parametrize("value,url", [("@abc.d-e", "https://www.youtube.com/@abc.d-e"),
+                                       ("youtube.com/@x", "https://youtube.com/@x"),
+                                       ("https://m.youtube.com/channel/UC1", "https://m.youtube.com/channel/UC1")])
+def test_channel_url_accepts_handle_and_address(value, url):
+    assert member_youtube.channel_url(value) == url
+
+
+@pytest.mark.parametrize("value", ["https://evil.test/@x", "https://youtu.be/abc", ""])
+def test_channel_url_rejects_non_channel(value):
+    with pytest.raises(ValueError):
+        member_youtube.channel_url(value)
