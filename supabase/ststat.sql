@@ -939,7 +939,7 @@ $cron$);
 
 
 -- ############################################################################
--- 13. 멤버 공지 모음(member_posts)
+-- 13. 멤버 공지 모음(member_posts)·다시보기(member_vods)
 -- ############################################################################
 -- 활동 멤버의 본인 글 첫 쪽을 live-status가 2분마다 채운다. 이후 쪽은 member-notices 서버가 읽는다.
 -- reg_date는 SOOP 문자열("YYYY-MM-DD HH:MM:SS", KST) 그대로라 글자순이 곧 시간순이다.
@@ -1007,6 +1007,63 @@ $$;
 revoke all on function public.replace_member_posts(jsonb, text[], text[]) from public, anon, authenticated;
 grant execute on function public.replace_member_posts(jsonb, text[], text[]) to service_role;
 
+-- 활동 멤버의 SOOP 다시보기 최근 20개를 sync_member_vods가 파이프라인마다 채운다. 영상 탭 '다시보기'가 읽는다.
+create table if not exists public.member_vods (
+  soop_id text not null,
+  title_no bigint not null,
+  title text not null,
+  reg_date text,
+  thumb text,
+  duration_sec integer,
+  views integer,
+  scanned_at timestamptz not null default now(),
+  primary key (soop_id, title_no)
+);
+create index if not exists member_vods_reg_date_idx on public.member_vods (reg_date desc);
+
+alter table public.member_vods enable row level security;
+grant select, insert, update, delete on table public.member_vods to service_role;
+
+-- 공지와 같은 규칙: 달라진 행만 쓰고, 받은 멤버의 목록에서 사라진 것과 활동 명단에서 빠진 멤버의 것만 지운다.
+create or replace function public.replace_member_vods(p_rows jsonb, p_scanned text[], p_active text[])
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  n_del integer;
+  n_up integer;
+begin
+  drop table if exists _mv_new;
+  create temp table _mv_new on commit drop as
+  select r.soop_id, r.title_no, r.title, r.reg_date, r.thumb, r.duration_sec, r.views
+  from jsonb_to_recordset(coalesce(p_rows, '[]'::jsonb)) as r(
+    soop_id text, title_no bigint, title text, reg_date text, thumb text, duration_sec integer, views integer)
+  where coalesce(r.soop_id, '') <> '' and r.title_no is not null and coalesce(r.title, '') <> '';
+
+  delete from public.member_vods m
+   where not (lower(m.soop_id) = any (select lower(x) from unnest(coalesce(p_active, '{}')) x))
+      or (lower(m.soop_id) = any (select lower(x) from unnest(coalesce(p_scanned, '{}')) x)
+          and not exists (select 1 from _mv_new n where lower(n.soop_id) = lower(m.soop_id) and n.title_no = m.title_no));
+  get diagnostics n_del = row_count;
+
+  insert into public.member_vods as m (soop_id, title_no, title, reg_date, thumb, duration_sec, views, scanned_at)
+  select distinct on (n.soop_id, n.title_no) n.soop_id, n.title_no, n.title, n.reg_date, n.thumb, n.duration_sec, n.views, now()
+  from _mv_new n
+  on conflict (soop_id, title_no) do update
+    set title = excluded.title, reg_date = excluded.reg_date, thumb = excluded.thumb,
+        duration_sec = excluded.duration_sec, views = excluded.views, scanned_at = now()
+    where (m.title, m.reg_date, m.thumb, m.duration_sec, m.views)
+      is distinct from (excluded.title, excluded.reg_date, excluded.thumb, excluded.duration_sec, excluded.views);
+  get diagnostics n_up = row_count;
+  return n_del + n_up;
+end;
+$$;
+
+revoke all on function public.replace_member_vods(jsonb, text[], text[]) from public, anon, authenticated;
+grant execute on function public.replace_member_vods(jsonb, text[], text[]) to service_role;
+
 
 -- ############################################################################
 -- 14. 익명(anon) 공개 범위: 공개 읽기 함수로만
@@ -1018,7 +1075,7 @@ revoke all on public.elo_derived_snapshots, public.elo_player_stats,
   public.elo_player_matches, public.elo_public_players, public.elo_public_matches,
   public.elo_players, public.elo_matches, public.elo_maps, public.elo_categories,
   public.daily_member_stats, public.synergy_daily_dates,
-  public.poonggo_monthly_stats, public.synergy_month_confirmations, public.live_broadcasts, public.live_scan_state, public.member_posts,
+  public.poonggo_monthly_stats, public.synergy_month_confirmations, public.live_broadcasts, public.live_scan_state, public.member_posts, public.member_vods,
   public.rounds_effective, public.sync_jobs from anon;
 
 -- 대학 로고는 어느 화면에든 나오는 대학만. 표는 staruniv.sql 6번.
@@ -1109,6 +1166,18 @@ language sql stable security definer set search_path = public as $$
         limit least(greatest(coalesce(p_limit, 6), 1), 50)) p;
 $$;
 
+-- 멤버 다시보기: 한 멤버(비우면 전체)의 최신 20개. 활동 멤버만
+create or replace function public.api_member_vods(p_soop_id text default null) returns json
+language sql stable security definer set search_path = public as $$
+  select coalesce(json_agg(json_build_object('soop_id', v.soop_id, 'title_no', v.title_no, 'title', v.title,
+      'reg_date', v.reg_date, 'thumb', v.thumb, 'duration_sec', v.duration_sec, 'views', v.views)
+      order by v.reg_date desc, v.title_no desc), '[]'::json)
+  from (select * from public.member_vods m
+        where (p_soop_id is null or lower(m.soop_id) = lower(p_soop_id))
+          and exists (select 1 from public.members s where lower(s.soop_id) = lower(m.soop_id) and s.left_date is null)
+        order by m.reg_date desc, m.title_no desc limit 20) v;
+$$;
+
 -- ELO 레이팅 기록이 있는 첫 달·마지막 달(활성 스냅샷)
 create or replace function public.api_elo_rating_range() returns json
 language sql stable security definer set search_path = public as $$
@@ -1135,10 +1204,10 @@ language sql stable security definer set search_path = public as $$
 $$;
 
 revoke all on function public.api_university_logos(jsonb), public.api_daily_stats(date, boolean), public.api_live(), public.api_live_ids(),
-  public.api_stats_dates(), public.api_member_posts(), public.api_recent_posts(integer),
+  public.api_stats_dates(), public.api_member_posts(), public.api_recent_posts(integer), public.api_member_vods(text),
   public.api_elo_rating_range(), public.api_elo_rating_history(integer), public.api_elo_ranking_meta() from public;
 grant execute on function public.api_university_logos(jsonb), public.api_daily_stats(date, boolean), public.api_live(), public.api_live_ids(),
-  public.api_stats_dates(), public.api_member_posts(), public.api_recent_posts(integer),
+  public.api_stats_dates(), public.api_member_posts(), public.api_recent_posts(integer), public.api_member_vods(text),
   public.api_elo_rating_range(), public.api_elo_rating_history(integer), public.api_elo_ranking_meta() to anon, authenticated;
 
 -- 긴 목록을 요청 한 번에 {"c": [열 이름], "r": [[값, …], …]}로 준다(StarUniv api.js가 객체 배열로 바꾼다).

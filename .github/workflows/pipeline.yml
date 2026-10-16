@@ -103,6 +103,19 @@ jobs:
       - run: pip install -r requirements.txt
       - run: bash scripts/retry_job.sh sync_videos
 
+  member_vods:
+    needs: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: bash scripts/retry_job.sh sync_member_vods
+
   audit:
     needs: test
     runs-on: ubuntu-24.04

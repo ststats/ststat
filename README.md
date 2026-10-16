@@ -8,6 +8,7 @@ StarUniv와 Synergy가 사용하는 중앙 배치 파이프라인입니다. 외�
 - H2H, 종족전, 랭킹, 레이팅 스냅샷 계산
 - 월 누적치(트래키파이, 예비로 Poonggo)와 Synergy 일별 통계 게시
 - YouTube 영상 메타데이터 수집
+- 활동 멤버의 SOOP 다시보기 최근 20개 수집(영상 탭 '다시보기')
 - StarUniv 경기·라운드 무결성 감사
 
 수동 편집 필드의 소유자는 StarUniv 관리자입니다. 세부 쓰기 경계는 `config/ownership.yml`에 있습니다.
@@ -30,6 +31,7 @@ python scripts/run_job.py sync_eloboard
 python scripts/run_job.py calculate_eloboard_stats
 python scripts/run_job.py sync_synergy_daily
 python scripts/run_job.py sync_videos
+python scripts/run_job.py sync_member_vods
 python scripts/run_job.py audit_match_rounds
 ```
 

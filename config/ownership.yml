@@ -157,6 +157,18 @@ video_collection:
     - "If all channels fail, the job fails. Nothing is deleted, but a channel that failed mid-upsert may be partially updated; re-running overwrites with the same values."
 
 
+member_vods:
+  owner: ststat
+  executor: external_cron_to_github_actions
+  cadence: "independent job in the same pipeline run (normally every 4 hours)"
+  source: "https://chapi.sooplive.com/api/{soop_id}/vods/review"
+  owns_tables:
+    - member_vods
+  rules:
+    - "Only active members (members.left_date is null); each keeps its latest 20 replays."
+    - "If fewer than half of the members are fetched, nothing is written; a failed member keeps its previous rows."
+
+
 match_round_integrity:
   owner: ststat
   executor: github_actions
