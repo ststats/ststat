@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import datetime, timezone
 
+from postgrest.types import CountMethod, ReturnMethod
+
 from models.synergy_stats import MonthlyLiveStats, SponsorStats, SynergyRosterMember
 from repositories.supabase import fetch_all, get_supabase
 
@@ -166,14 +168,15 @@ def apply_roster_backfill(member: SynergyRosterMember, from_date: str) -> int:
         "gender": member.gender,
         "birth_date": member.birth_date,
     }
+    # 고친 행 수만 쓰므로 행 내용은 되돌려받지 않는다(소급 기간만큼 전체 칸이 내려온다)
     result = (
         db.table("daily_member_stats")
-        .update(payload)
+        .update(payload, count=CountMethod.exact, returning=ReturnMethod.minimal)
         .eq("soop_id", member.soop_id)
         .gte("stat_date", from_date)
         .execute()
     )
-    return len(result.data or [])
+    return int(result.count or 0)
 
 
 def clear_modified_at(markers: dict[str, str]) -> int:

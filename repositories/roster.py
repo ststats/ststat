@@ -98,7 +98,6 @@ def upsert_candidates(candidates: list[RosterCandidate]) -> int:
             "affiliation": c.affiliation,
             "source": c.source,
             "found_at": today,
-            "last_seen_at": today,
             "status": "pending",
         }
         for c in candidates

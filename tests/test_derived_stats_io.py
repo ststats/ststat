@@ -41,6 +41,10 @@ class FakeQuery:
         self.filters.append(lambda r: r[col] == v)
         return self
 
+    def neq(self, col, v):
+        self.filters.append(lambda r: r[col] != v)
+        return self
+
     def limit(self, n):
         self.lim = n
         return self
@@ -279,6 +283,28 @@ def test_run_job_closes_stale_running_rows_of_the_same_job():
     run_job.close_stale_runs(db, "sync_eloboard")
     status = {r["id"]: r["status"] for r in db.tables["sync_jobs"]}
     assert status == {1: "failed", 2: "running", 3: "running"}
+
+
+def test_run_job_prunes_only_old_finished_rows_of_the_same_job():
+    from scripts import run_job
+
+    now = datetime.now(timezone.utc)
+    old = (now - timedelta(days=91)).isoformat()
+    db = FakeDB(
+        {
+            "sync_jobs": [
+                {"id": 1, "job_name": "sync_eloboard", "status": "success", "started_at": old},
+                {"id": 2, "job_name": "sync_eloboard", "status": "failed", "started_at": old},
+                {"id": 3, "job_name": "sync_eloboard", "status": "running", "started_at": old},
+                {"id": 4, "job_name": "sync_eloboard", "status": "success", "started_at": now.isoformat()},
+                {"id": 5, "job_name": "sync_eloboard_deleted_backup", "status": "success", "started_at": old},
+                {"id": 6, "job_name": "sync_videos", "status": "success", "started_at": old},
+            ]
+        }
+    )
+    run_job.prune_old_runs(db, "sync_eloboard")
+    # 90일 지난 끝난 기록만 지운다. 실행 중·최근 기록, 경기 삭제 백업, 다른 작업 기록은 남긴다.
+    assert {r["id"] for r in db.tables["sync_jobs"]} == {3, 4, 5, 6}
 
 
 def test_match_load_splits_range_on_statement_timeout(monkeypatch):

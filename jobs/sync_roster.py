@@ -17,7 +17,7 @@ from repositories.roster import (
     upsert_candidates,
 )
 
-TIERS_URL = "https://eloboard.co.kr/api/tiers"
+TIERS_URL = "https://eloboard.com/api/tiers"
 MAX_NEW_CANDIDATES_PER_RUN = 100
 HTTP_TIMEOUT_SECONDS = 30
 

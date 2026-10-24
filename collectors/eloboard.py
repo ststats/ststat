@@ -6,7 +6,7 @@ import time
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-API_URL = "https://eloboard.co.kr/api/matches"
+API_URL = "https://eloboard.com/api/matches"
 PAGE_LIMIT = 200
 PAGE_STEP = PAGE_LIMIT - 10
 MAX_RETRY = 4

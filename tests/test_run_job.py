@@ -12,6 +12,7 @@ class DB:
     def __init__(self, fail_updates=False):
         self.fail_updates = fail_updates
         self.updates = []
+        self.deletes = 0
 
     def table(self, name):
         db = self
@@ -26,15 +27,21 @@ class DB:
                 self.fields = fields
                 return self
 
+            def delete(self):
+                self.kind = "delete"
+                return self
+
             def eq(self, *a):
                 return self
 
-            def lt(self, *a):
-                return self
+            neq = lt = eq
 
             def execute(self):
                 if self.kind == "insert":
                     return types.SimpleNamespace(data=[{"id": 1}])
+                if self.kind == "delete":
+                    db.deletes += 1
+                    return types.SimpleNamespace(data=[])
                 if db.fail_updates and self.fields.get("status") in ("success", "failed"):
                     raise RuntimeError("log write failed")
                 db.updates.append(self.fields)
@@ -73,3 +80,4 @@ def test_success_is_recorded(monkeypatch):
     db = DB()
     _run(monkeypatch, db, lambda: JobResult(records_read=3))
     assert db.updates[-1]["status"] == "success" and db.updates[-1]["records_read"] == 3
+    assert db.deletes == 1  # 오래된 기록 정리

@@ -41,7 +41,7 @@ eloboard:
   owner: ststat
   executor: external_cron_to_github_actions
   cadence: "4 hours"
-  source: "https://eloboard.co.kr/api/matches"
+  source: "https://eloboard.com/api/matches"
   owns_tables:
     - elo_categories
     - elo_maps

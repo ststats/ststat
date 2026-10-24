@@ -28,6 +28,8 @@ def run() -> JobResult:
     successes = 0
     methods: dict[str, int] = {"api": 0, "rss": 0}
     errors: list[dict] = []
+    # 숲 미리보기 실패는 따로 모은다: 지워진 다시보기 링크가 많으면 앞 20개 기록에서 채널 오류가 밀려난다
+    thumbnail_errors: list[dict] = []
     api_fallbacks: list[dict] = []
 
     # 숲 다시보기 미리보기: 관리자 추천 영상과 연혁 링크. 실패하면 다음 실행에서 다시 시도한다.
@@ -40,7 +42,7 @@ def run() -> JobResult:
             thumbnails_written += save(collect_thumbnail(video_id))
         except Exception as exc:
             skipped += 1
-            errors.append({**label, "error": f"{type(exc).__name__}: {exc}"})
+            thumbnail_errors.append({**label, "error": f"{type(exc).__name__}: {exc}"})
 
     picks = load_soop_picks_without_thumbnail()
     for pick in picks:
@@ -99,6 +101,7 @@ def run() -> JobResult:
             "channels_succeeded": successes,
             "methods": methods,
             "errors": errors[:20],
+            "thumbnail_errors": thumbnail_errors[:20],
             "api_fallbacks": api_fallbacks[:20],
             "full_sync": full,
             "soop_thumbnails_requested": len(picks) + len(history),

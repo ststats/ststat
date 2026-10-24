@@ -17,6 +17,9 @@ from repositories.supabase import get_supabase
 
 # 가장 긴 작업 제한(90분)보다 넉넉히. 이보다 오래 'running'이면 러너가 끝을 기록하지 못한 것이다.
 STALE_RUNNING_AFTER = timedelta(hours=3)
+# 작업 기록은 이만큼만 남긴다(4시간마다 작업마다 한 줄씩 쌓인다). 다음 실행이 읽는 건 가장 최근 성공 기록뿐이고,
+# 경기 삭제 백업(sync_eloboard_deleted_backup)은 작업 이름이 달라 지우지 않는다.
+KEEP_RUNS_FOR = timedelta(days=90)
 
 
 def utc_now():
@@ -44,6 +47,16 @@ def close_stale_runs(db, job_name: str):
         print(f"stale sync_jobs cleanup skipped: {exc}", file=sys.stderr)
 
 
+def prune_old_runs(db, job_name: str):
+    cutoff = (datetime.now(timezone.utc) - KEEP_RUNS_FOR).isoformat()
+    try:
+        db.table("sync_jobs").delete().eq("job_name", job_name).neq("status", "running").lt(
+            "started_at", cutoff
+        ).execute()
+    except Exception as exc:  # 정리 실패로 작업을 막지 않는다
+        print(f"old sync_jobs cleanup skipped: {exc}", file=sys.stderr)
+
+
 def record(db, sync_job_id, fields: dict, attempts: int = 3) -> bool:
     """끝내 실패하면 예외 대신 False."""
     for attempt in range(attempts):
@@ -66,6 +79,7 @@ def main():
 
     db = get_supabase()
     close_stale_runs(db, job_name)
+    prune_old_runs(db, job_name)
 
     inserted = (
         db.table("sync_jobs")
