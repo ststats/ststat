@@ -1,0 +1,37 @@
+name: Test
+
+# pytest. Pipeline도 공유 DB에 쓰기 전에 이 워크플로를 부른다.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+      - run: python -m pytest -q
+      # 코드 모양 검사는 파이프라인(workflow_call)에서는 건너뛴다(모양 때문에 수집이 막히지 않게). 고칠 땐 ruff format
+      - if: github.event_name == 'pull_request' || github.event_name == 'push'
+        run: ruff format --check
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      # 코드 모양은 Prettier로 맞춘다(스타유니브와 같은 설정). 파이프라인에서는 건너뛴다. 고칠 땐 npm run format
+      - if: github.event_name == 'pull_request' || github.event_name == 'push'
+        run: npm run format:check
+      - run: npm test
+

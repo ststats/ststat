@@ -1,0 +1,16 @@
+{
+  "name": "ststat",
+  "private": true,
+  "description": "Edge Function(SOOP 공지·방송 상태) JS 테스트와 코드 모양 검사. 파이프라인은 파이썬(requirements.txt).",
+  "scripts": {
+    "test": "node --test tests/*.mjs",
+    "format": "prettier --write 'supabase/functions/**/*.{ts,mjs}' 'tests/*.mjs'",
+    "format:check": "prettier --check 'supabase/functions/**/*.{ts,mjs}' 'tests/*.mjs'"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "devDependencies": {
+    "prettier": "3.9.9"
+  }
+}
