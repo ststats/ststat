@@ -218,14 +218,24 @@ def collect(cutoff: str, *, get=get_html) -> Collected:
         return page_data(get(path))
 
     events = {e["id"]: e for arr in json_arrays(fetch("/events"), "events") for e in arr if isinstance(e, dict)}
+    if not events:
+        # 막혔거나 페이지 모양이 바뀌면 빈 목록이 온다. 이대로 쓰면 대회 종류를 모두 잃으니 멈춘다
+        raise RuntimeError("EloBoard 대회 목록을 읽지 못했습니다(페이지 모양 변경 또는 차단)")
     by_name = {e["name"]: e for e in events.values()}
 
     def category_of_context(context: str, default: str) -> str:
         name = context.split(" · ", 1)[-1].strip()
         return (by_name.get(name) or {}).get("category") or default
 
+    def ended_early(name: str, reached: bool) -> None:
+        # 목록이 cutoff에 닿기 전에 끝났다(스폰 목록은 최근 30일만 보인다). 그 앞 경기는 못 읽었으니 사라진 경기 판정을 막는다
+        if not reached:
+            out.complete = False
+            out.notes.append(f"{name}: 목록이 {cutoff}까지 닿기 전에 끝남")
+
     # 경기 묶음 목록 탭(스폰·중장전·끝장전·멸망전): 날짜순이라 cutoff보다 이른 묶음이 보이면 멈춘다
     for kind in (None, *TAB_KINDS):
+        reached = False
         for page in range(1, MAX_LIST_PAGES + 1):
             query = "&".join(x for x in (f"kind={kind}" if kind else "", f"p={page}" if page > 1 else "") if x)
             duels = [
@@ -234,6 +244,9 @@ def collect(cutoff: str, *, get=get_html) -> Collected:
                 if str(d.get("key", "")).startswith("m")
             ]
             if not duels:
+                if kind is None and page == 1:
+                    raise RuntimeError("EloBoard 스폰 전적 첫 쪽이 비었습니다(페이지 모양 변경 또는 차단)")
+                ended_early(f"matches kind={kind}", reached)
                 break
             for d in duels:
                 if str(d.get("day") or "") >= cutoff:
@@ -243,6 +256,7 @@ def collect(cutoff: str, *, get=get_html) -> Collected:
                         )
                     )
             if min(str(d.get("day") or "") for d in duels) < cutoff:
+                reached = True
                 break
         else:
             out.complete = False
@@ -250,9 +264,11 @@ def collect(cutoff: str, *, get=get_html) -> Collected:
 
     # 팀리그·프로리그·대학대전: 그날 묶음 목록 → 그날 상세
     for kind in ("team", "war"):
+        reached = False
         for page in range(1, MAX_LIST_PAGES + 1):
             duels = duels_of(fetch(f"/matches?kind={kind}" + (f"&p={page}" if page > 1 else "")))
             if not duels:
+                ended_early(f"matches kind={kind}", reached)
                 break
             for d in duels:
                 day, href = str(d.get("day") or ""), str(d.get("href") or "")
@@ -271,7 +287,11 @@ def collect(cutoff: str, *, get=get_html) -> Collected:
                 out.add(rows)
                 out.skipped += skipped
             if min(str(d.get("day") or "") for d in duels) < cutoff:
+                reached = True
                 break
+        else:
+            out.complete = False
+            out.notes.append(f"matches kind={kind}: {MAX_LIST_PAGES}쪽 안에 {cutoff}까지 닿지 못함")
 
     # 탭에 안 나오는 대회(KCM·ASL·컵 등) 중 기간 안에 경기가 있는 것
     for ev in events.values():

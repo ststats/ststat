@@ -83,6 +83,7 @@ def test_sync_rereads_old_ids_restored_within_this_month(monkeypatch):
         "fetch_page",
         lambda offset, delay=0: pages[offset // job.PAGE_STEP] if offset // job.PAGE_STEP < len(pages) else [],
     )
+    monkeypatch.setattr(job, "SOURCE", "api")
     monkeypatch.setattr(job, "DEFAULT_DELAY", 0)
     monkeypatch.setattr(job, "get_latest_match_id", lambda: 100)
     saved = {}
@@ -116,6 +117,7 @@ def _setup_sync(monkeypatch, pages, stop_at, db_window_ids, previous_pending=())
         "fetch_page",
         lambda offset, delay=0: pages[offset // job.PAGE_STEP] if offset // job.PAGE_STEP < len(pages) else [],
     )
+    monkeypatch.setattr(job, "SOURCE", "api")
     monkeypatch.setattr(job, "DEFAULT_DELAY", 0)
     monkeypatch.setattr(job, "get_latest_match_id", lambda: stop_at)
     monkeypatch.setattr(job, "upsert_dimensions", lambda m: {"players": 0, "maps": 0, "categories": 0})

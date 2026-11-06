@@ -77,9 +77,11 @@ def upsert_dimensions(matches: list[EloMatch]) -> dict[str, int]:
             if p.race:
                 race_counts[p.elo_id][p.race] += 1
 
+    # HTML 스폰 목록엔 종족이 없다. 비워 보내면 DB 함수가 저장된 종족을 지우니, 이번에 종족이 안 보인 선수는 저장된 값을 보낸다
+    stored = load_player_races({elo_id for elo_id in names if not race_counts[elo_id]})
     players = []
     for elo_id, name in names.items():
-        race = race_counts[elo_id].most_common(1)[0][0] if race_counts[elo_id] else None
+        race = race_counts[elo_id].most_common(1)[0][0] if race_counts[elo_id] else stored.get(elo_id)
         players.append({"elo_id": elo_id, "name": name, "race": race})
     map_rows = [{"map_id": k, "name": v} for k, v in maps.items()]
     changed = _upsert_batch(players, map_rows)
@@ -90,6 +92,23 @@ def upsert_dimensions(matches: list[EloMatch]) -> dict[str, int]:
         "maps": int(changed.get("maps") or 0),
         "categories": max(0, len(categories - set(before))),
     }
+
+
+def load_player_races(ids: set[int]) -> dict[int, str]:
+    """저장된 선수 종족(종족이 비지 않은 것만)."""
+    if not ids:
+        return {}
+    db = get_supabase()
+    values = sorted(ids)
+    out: dict[int, str] = {}
+    for start in range(0, len(values), 200):
+        for r in (
+            db.table("elo_players").select("elo_id,race").in_("elo_id", values[start : start + 200]).execute().data
+            or []
+        ):
+            if r.get("race"):
+                out[int(r["elo_id"])] = r["race"]
+    return out
 
 
 def upsert_matches(matches: list[EloMatch]) -> int:
@@ -219,9 +238,8 @@ def stage_unknown_elo_candidates(matches: list[EloMatch]) -> int:
     return len(payload)
 
 
-def load_previous_pending_deletes() -> set[int]:
-    """지난번 성공한 sync_eloboard가 '안 보였다'고 적어 둔 경기 ID.
-    목록이 offset으로 넘어가 수집 중 끼어든 경기 때문에 한 번 안 보일 수 있어, 두 번 연속 안 보인 것만 지운다."""
+def load_previous_metadata() -> dict:
+    """지난번 성공한 sync_eloboard의 metadata."""
     db = get_supabase()
     rows = (
         db.table("sync_jobs")
@@ -234,9 +252,13 @@ def load_previous_pending_deletes() -> set[int]:
         .data
         or []
     )
-    if not rows:
-        return set()
-    pending = (rows[0].get("metadata") or {}).get("pending_delete") or []
+    return (rows[0].get("metadata") or {}) if rows else {}
+
+
+def load_previous_pending_deletes() -> set[int]:
+    """지난번 성공한 sync_eloboard가 '안 보였다'고 적어 둔 경기 ID.
+    목록이 offset으로 넘어가 수집 중 끼어든 경기 때문에 한 번 안 보일 수 있어, 두 번 연속 안 보인 것만 지운다."""
+    pending = load_previous_metadata().get("pending_delete") or []
     out = set()
     for value in pending:
         try:

@@ -5,6 +5,7 @@ import os
 import time
 
 from collectors.eloboard import DEFAULT_DELAY, PAGE_STEP, fetch_page
+from collectors.eloboard_html import collect
 from models.eloboard import EloMatch
 from models.sync_job import JobResult
 from repositories.eloboard import (
@@ -13,12 +14,15 @@ from repositories.eloboard import (
     load_match_ids_between,
     load_match_rows,
     save_deletion_backup,
+    load_previous_metadata,
     load_previous_pending_deletes,
     stage_unknown_elo_candidates,
     upsert_dimensions,
     upsert_matches,
 )
 
+# html: 공개 페이지에서 읽는다(collectors/eloboard_html.py). api: 2026-11-06부터 EloBoard가 /api/를 막았다
+SOURCE = os.getenv("ELOBOARD_SOURCE", "html")
 OVERLAP_DAYS = int(os.getenv("ELOBOARD_OVERLAP_DAYS", "3"))
 # 목록이 날짜순이라 늦게 등록된 경기는 목록 깊숙이 있다. 그래서 이번 달 1일부터 매번 다시 읽고,
 # 지난달 확정이 도는 월초 PREV_MONTH_DAYS일 동안은 지난달 1일부터 읽는다.
@@ -42,6 +46,10 @@ def rescan_cutoff(today: dt.date, overlap_days: int = OVERLAP_DAYS, prev_month_d
 
 
 def run() -> JobResult:
+    return run_html() if SOURCE == "html" else run_api()
+
+
+def run_api() -> JobResult:
     stop_at = get_latest_match_id()
     today_kst = dt.datetime.now(KST).date()
     cutoff = rescan_cutoff(today_kst) if stop_at else ""
@@ -108,42 +116,13 @@ def run() -> JobResult:
 
     if not finished:
         raise RuntimeError("EloBoard collection did not finish the incremental window; refusing partial write")
-    if raw_count == 0:
-        raise RuntimeError("EloBoard returned zero records; refusing to write")
-    valid_ratio = (raw_count - invalid_count) / raw_count
-    if valid_ratio < MIN_VALID_RATIO:
-        raise RuntimeError(f"EloBoard parse validity {valid_ratio:.1%} below {MIN_VALID_RATIO:.0%}; refusing to write")
-
-    matches = list(parsed.values())
-    dimensions = upsert_dimensions(matches)
-    upserted = upsert_matches(matches)
-    candidates = stage_unknown_elo_candidates(matches)
-
-    # 사라진 경기는 훑은 날짜 범위(cutoff ~ 오늘) 안에서만 판정한다(ID 범위로 고르면 훑지 않은 옛 경기까지 지운다).
-    # offset 목록이라 한 번은 밀려 빠질 수 있어, 두 번 연속 안 보인 경기만 지운다.
-    deleted = 0
-    deleted_rows: list[dict] = []
-    delete_skipped = None
-    pending_delete: list[int] = []
-    if cutoff:
-        window_ids = load_match_ids_between(cutoff, today_kst.isoformat())
-        gone = window_ids - seen_ids
-        limit = max(MAX_DELETE_MIN, int(len(window_ids) * MAX_DELETE_RATIO))
-        if len(gone) > limit:
-            delete_skipped = f"too_many:{len(gone)}>{limit}"
-        else:
-            confirmed = gone & load_previous_pending_deletes()
-            # 잘못 지웠을 때 되살릴 수 있게 원본 행을 남긴다
-            deleted_rows = load_match_rows(confirmed)
-            if len(deleted_rows) != len(confirmed):
-                raise RuntimeError("Could not load every match to back up before deletion; refusing to delete")
-            save_deletion_backup(deleted_rows, os.getenv("GITHUB_RUN_ID"))
-            deleted = delete_match_ids(confirmed)
-            pending_delete = sorted(gone - confirmed)[:MAX_PENDING_DELETE]
+    valid_ratio = _check_validity(raw_count, invalid_count)
+    saved = _save(list(parsed.values()))
+    deletion = _delete_missing(cutoff, today_kst.isoformat(), seen_ids) if cutoff else _no_deletion([], None)
 
     return JobResult(
         records_read=raw_count,
-        records_written=upserted + deleted + candidates,
+        records_written=saved["matches_upserted"] + deletion["matches_deleted"] + saved["candidate_players_staged"],
         records_skipped=invalid_count,
         source_cursor=str(max(seen_ids) if seen_ids else stop_at),
         metadata={
@@ -152,16 +131,113 @@ def run() -> JobResult:
             "overlap_days": OVERLAP_DAYS,
             "prev_month_days": PREV_MONTH_DAYS,
             "rescan_from": cutoff,
-            "matches_upserted": upserted,
-            "matches_deleted": deleted,
-            "deleted_rows": deleted_rows,
+            **saved,
+            **deletion,
             "invalid_samples": invalid_samples,
-            "delete_skipped": delete_skipped,
-            "pending_delete": pending_delete,
-            "candidate_players_staged": candidates,
-            "players_upserted": dimensions["players"],
-            "maps_upserted": dimensions["maps"],
-            "categories_added": dimensions["categories"],
             "valid_ratio": valid_ratio,
         },
     )
+
+
+def run_html() -> JobResult:
+    stop_at = get_latest_match_id()
+    today_kst = dt.datetime.now(KST).date()
+    previous = load_previous_metadata()
+    # 이번 달 1일부터 다시 읽기(약 280번 요청, 10분)는 하루 첫 실행만 한다. 그 밖엔 최근 OVERLAP_DAYS일만(약 45번)
+    deep = previous.get("deep_on") != today_kst.isoformat()
+    cutoff = rescan_cutoff(today_kst) if deep else (today_kst - dt.timedelta(days=OVERLAP_DAYS)).isoformat()
+    got = collect(cutoff)
+
+    parsed: dict[int, EloMatch] = {}
+    invalid_count = 0
+    invalid_samples: list[dict] = []
+    max_match_date = (today_kst + dt.timedelta(days=1)).isoformat()
+    for row in got.rows.values():
+        match, reason = EloMatch.parse(row, max_date=max_match_date)
+        if match is None:
+            invalid_count += 1
+            if len(invalid_samples) < 30:
+                invalid_samples.append({"id": row.get("id"), "reason": reason})
+            continue
+        parsed[match.elo_match_id] = match
+
+    raw_count = len(got.rows)
+    valid_ratio = _check_validity(raw_count, invalid_count)
+    saved = _save(list(parsed.values()))
+    seen_ids = set(got.rows)
+    # 사라진 경기는 기간 처음까지 다 읽은 다시 읽기에서만 판정한다. 그 밖엔 앞 판정의 '안 보인 경기'를 그대로 넘긴다
+    if deep and got.complete:
+        deletion = _delete_missing(cutoff, today_kst.isoformat(), seen_ids)
+    else:
+        carried = sorted(load_previous_pending_deletes())[:MAX_PENDING_DELETE]
+        deletion = _no_deletion(carried, "incomplete" if deep else "recent_only")
+
+    return JobResult(
+        records_read=raw_count,
+        records_written=saved["matches_upserted"] + deletion["matches_deleted"] + saved["candidate_players_staged"],
+        records_skipped=invalid_count,
+        source_cursor=str(max(seen_ids) if seen_ids else stop_at),
+        metadata={
+            "source": "html",
+            "previous_max_id": stop_at,
+            "deep": deep,
+            "deep_on": today_kst.isoformat() if deep else previous.get("deep_on"),
+            "rescan_from": cutoff,
+            "requests": got.requests,
+            "complete": got.complete,
+            "notes": got.notes[:30],
+            "unsupported_skipped": got.skipped,
+            **saved,
+            **deletion,
+            "invalid_samples": invalid_samples,
+            "valid_ratio": valid_ratio,
+        },
+    )
+
+
+def _check_validity(raw_count: int, invalid_count: int) -> float:
+    if raw_count == 0:
+        raise RuntimeError("EloBoard returned zero records; refusing to write")
+    valid_ratio = (raw_count - invalid_count) / raw_count
+    if valid_ratio < MIN_VALID_RATIO:
+        raise RuntimeError(f"EloBoard parse validity {valid_ratio:.1%} below {MIN_VALID_RATIO:.0%}; refusing to write")
+    return valid_ratio
+
+
+def _save(matches: list[EloMatch]) -> dict:
+    dimensions = upsert_dimensions(matches)
+    upserted = upsert_matches(matches)
+    candidates = stage_unknown_elo_candidates(matches)
+    return {
+        "matches_upserted": upserted,
+        "candidate_players_staged": candidates,
+        "players_upserted": dimensions["players"],
+        "maps_upserted": dimensions["maps"],
+        "categories_added": dimensions["categories"],
+    }
+
+
+def _no_deletion(pending_delete: list[int], skipped: str | None) -> dict:
+    return {"matches_deleted": 0, "deleted_rows": [], "delete_skipped": skipped, "pending_delete": pending_delete}
+
+
+def _delete_missing(cutoff: str, today: str, seen_ids: set[int]) -> dict:
+    """사라진 경기는 훑은 날짜 범위(cutoff ~ 오늘) 안에서만 판정한다(ID 범위로 고르면 훑지 않은 옛 경기까지 지운다).
+    한 번은 밀려 빠질 수 있어, 두 번 연속 안 보인 경기만 지운다."""
+    window_ids = load_match_ids_between(cutoff, today)
+    gone = window_ids - seen_ids
+    limit = max(MAX_DELETE_MIN, int(len(window_ids) * MAX_DELETE_RATIO))
+    if len(gone) > limit:
+        return _no_deletion([], f"too_many:{len(gone)}>{limit}")
+    confirmed = gone & load_previous_pending_deletes()
+    # 잘못 지웠을 때 되살릴 수 있게 원본 행을 남긴다
+    deleted_rows = load_match_rows(confirmed)
+    if len(deleted_rows) != len(confirmed):
+        raise RuntimeError("Could not load every match to back up before deletion; refusing to delete")
+    save_deletion_backup(deleted_rows, os.getenv("GITHUB_RUN_ID"))
+    return {
+        "matches_deleted": delete_match_ids(confirmed),
+        "deleted_rows": deleted_rows,
+        "delete_skipped": None,
+        "pending_delete": sorted(gone - confirmed)[:MAX_PENDING_DELETE],
+    }
