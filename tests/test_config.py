@@ -40,3 +40,13 @@ def test_pipeline_retries_idempotent_jobs_once_but_not_eloboard():
     assert "retry_job.sh sync_eloboard" not in wf
     script = Path("scripts/retry_job.sh").read_text(encoding="utf-8")
     assert 'python scripts/run_job.py "$1" && exit 0' in script and "sleep 60" in script
+
+
+def test_pipeline_continues_when_eloboard_sync_fails():
+    from pathlib import Path
+
+    # EloBoard가 수집을 막아도 뒤 작업은 돌고, 시너지는 경기 수집 실패를 안다(지난달 확정을 미룬다)
+    wf = Path(".github/workflows/pipeline.yml").read_text(encoding="utf-8")
+    assert "id: sync\n        continue-on-error: true" in wf
+    assert "ok: ${{ steps.sync.outcome == 'success' }}" in wf
+    assert "needs.eloboard.outputs.ok == 'true'" in wf

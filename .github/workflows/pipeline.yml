@@ -43,6 +43,8 @@ jobs:
     needs: foundation
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    outputs:
+      ok: ${{ steps.sync.outcome == 'success' }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -50,7 +52,11 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -r requirements.txt
+      # EloBoard가 2026-11 개편 뒤 자동 수집(/api/)을 막아(robots.txt·nginx 403) 실패해도 뒤 작업은 기존 경기로 계속한다.
+      # 경기를 다 받은 뒤에야 쓰므로(sync_eloboard) 실패해도 반쯤 쓴 경기는 없다. 성공 여부는 outputs.ok로 넘긴다
       - name: Sync EloBoard matches
+        id: sync
+        continue-on-error: true
         env:
           ELOBOARD_DELAY: "2.0"
           ELOBOARD_OVERLAP_DAYS: "3"
@@ -76,7 +82,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      ELOBOARD_OK: ${{ needs.eloboard.result == 'success' }}
+      ELOBOARD_OK: ${{ needs.eloboard.result == 'success' && needs.eloboard.outputs.ok == 'true' }}
       # 기본 트래키파이, 문제가 생기면 저장소 변수 MONTHLY_SOURCE=poonggo(예비)
       MONTHLY_SOURCE: ${{ vars.MONTHLY_SOURCE }}
     steps:
