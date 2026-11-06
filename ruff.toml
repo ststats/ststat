@@ -1,0 +1,3 @@
+# 파이썬 코드 모양. 스타유니브·ststat·시너지가 같은 설정을 쓴다(JS는 .prettierrc.json). 고칠 땐 ruff format
+line-length = 120
+target-version = "py312"
