@@ -10,7 +10,8 @@ API와 같은 경기(세트) 단위 행을 만든다. 요청 사이는 collector
 - 대학대전·미니대전: /matches?kind=war → 그날 상세 /colleges/wars/days/{id}
 - 그 밖에 기간 안에 경기가 있는 대회(KCM·ASL·컵 등): /events/{id}?tab=results
 
-만든 행은 API 행과 같은 모양({id, played_on, map_id, map_name, category, participants})이라 EloMatch.parse를 그대로 쓴다.
+만든 행은 API 행과 같은 모양({id, played_on, map_id, map_name, category, participants})이라
+EloMatch.parse를 그대로 쓴다.
 대회 종류(category)는 대회 목록(/events)의 category를 쓴다(API와 같은 이름). 스폰 탭 묶음은 종족이 없어 race는 비운다.
 """
 
@@ -228,7 +229,8 @@ def collect(cutoff: str, *, get=get_html) -> Collected:
         return (by_name.get(name) or {}).get("category") or default
 
     def ended_early(name: str, reached: bool) -> None:
-        # 목록이 cutoff에 닿기 전에 끝났다(스폰 말고 탭 목록은 최근 30일쯤만 보인다). 그 앞 경기는 못 읽었으니 사라진 경기 판정을 막는다
+        # 목록이 cutoff에 닿기 전에 끝났다(스폰 말고 탭 목록은 최근 30일쯤만 보인다).
+        # 그 앞 경기는 못 읽었으니 사라진 경기 판정을 막는다
         if not reached:
             out.complete = False
             out.notes.append(f"{name}: 목록이 {cutoff}까지 닿기 전에 끝남")
