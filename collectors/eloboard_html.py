@@ -32,7 +32,7 @@ TAB_KINDS = ("jungjang", "kkeutjang", "myeolmang")
 TAB_GROUPS = {"team", "pro_league", *TAB_KINDS}
 MAX_LIST_PAGES = 400  # 목록 한 탭에서 넘길 최대 쪽 수(30일치 스폰이 약 180쪽)
 
-_PUSH_RE = re.compile(r"self\.__next_f\.push\(\[1,\"(.*?)\"\]\)", re.S)
+_PUSH_RE = re.compile(r"self\.__next_f\.push\(\[1,\"(.*?)\"\]\)", re.DOTALL)
 _last_request = 0.0
 
 
@@ -63,7 +63,7 @@ def get_html(path: str, *, delay: float = DEFAULT_DELAY) -> str:
     raise RuntimeError(f"EloBoard fetch failed after {MAX_RETRY} attempts at {path}: {last_error}")
 
 
-_ROW_RE = re.compile(r"(?:^|\n)([0-9a-f]+):", re.M)
+_ROW_RE = re.compile(r"(?:^|\n)([0-9a-f]+):", re.MULTILINE)
 _REF_RE = re.compile(r'(?<!"\$",)"\$L([0-9a-f]+)"')
 
 
