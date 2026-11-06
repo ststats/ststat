@@ -228,7 +228,7 @@ def collect(cutoff: str, *, get=get_html) -> Collected:
         return (by_name.get(name) or {}).get("category") or default
 
     def ended_early(name: str, reached: bool) -> None:
-        # 목록이 cutoff에 닿기 전에 끝났다(스폰 목록은 최근 30일만 보인다). 그 앞 경기는 못 읽었으니 사라진 경기 판정을 막는다
+        # 목록이 cutoff에 닿기 전에 끝났다(스폰 말고 탭 목록은 최근 30일쯤만 보인다). 그 앞 경기는 못 읽었으니 사라진 경기 판정을 막는다
         if not reached:
             out.complete = False
             out.notes.append(f"{name}: 목록이 {cutoff}까지 닿기 전에 끝남")

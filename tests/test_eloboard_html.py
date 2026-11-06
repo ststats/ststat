@@ -111,7 +111,7 @@ def test_collect_reads_every_tab_with_event_categories():
 
 
 def test_collect_marks_incomplete_when_a_list_ends_before_the_cutoff():
-    """스폰 목록은 최근 30일만 보여 기간 처음까지 닿지 못하면 사라진 경기 판정을 막는다."""
+    """탭 목록이 최근 30일쯤만 보여 기간 처음까지 닿지 못하면 사라진 경기 판정을 막는다."""
     get, _ = _site(spon_reaches_cutoff=False)
     got = html.collect("2026-09-10", get=get)
     assert not got.complete
