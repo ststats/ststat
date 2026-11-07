@@ -23,8 +23,10 @@ from repositories.eloboard import (
 
 # html: 공개 페이지에서 읽는다(collectors/eloboard_html.py). api: 2026-11-06부터 EloBoard가 /api/를 막았다
 SOURCE = os.getenv("ELOBOARD_SOURCE", "html")
+# EloBoard 전적 목록(/matches 탭)이 보여 주는 최근 날 수
+LIST_DAYS = 30
 OVERLAP_DAYS = int(os.getenv("ELOBOARD_OVERLAP_DAYS", "3"))
-# 목록이 날짜순이라 늦게 등록된 경기는 목록 깊숙이 있다. 그래서 이번 달 1일부터 매번 다시 읽고,
+# API 방식(run_api): 목록이 날짜순이라 늦게 등록된 경기는 목록 깊숙이 있다. 그래서 이번 달 1일부터 매번 다시 읽고,
 # 지난달 확정이 도는 월초 PREV_MONTH_DAYS일 동안은 지난달 1일부터 읽는다.
 PREV_MONTH_DAYS = int(os.getenv("ELOBOARD_PREV_MONTH_DAYS", "7"))
 KST = dt.timezone(dt.timedelta(hours=9))
@@ -143,10 +145,12 @@ def run_html() -> JobResult:
     stop_at = get_latest_match_id()
     today_kst = dt.datetime.now(KST).date()
     previous = load_previous_metadata()
-    # 이번 달 1일부터 다시 읽기(약 280번 요청, 10분)는 하루 첫 실행만 한다. 그 밖엔 최근 OVERLAP_DAYS일만(약 45번)
+    # 목록이 보여 주는 최근 LIST_DAYS일을 다 다시 읽기(약 280번 요청, 10분)는 하루 첫 실행만 한다.
+    # 그 밖엔 최근 OVERLAP_DAYS일만(약 45번). 경계 날은 시각에 따라 일부만 보여 하루 안쪽부터 읽는다
     deep = previous.get("deep_on") != today_kst.isoformat()
-    cutoff = rescan_cutoff(today_kst) if deep else (today_kst - dt.timedelta(days=OVERLAP_DAYS)).isoformat()
-    got = collect(cutoff)
+    days = LIST_DAYS - 1 if deep else OVERLAP_DAYS
+    cutoff = (today_kst - dt.timedelta(days=days)).isoformat()
+    got = collect(cutoff, listed_from=(today_kst - dt.timedelta(days=LIST_DAYS)).isoformat())
 
     parsed: dict[int, EloMatch] = {}
     invalid_count = 0

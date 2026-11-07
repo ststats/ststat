@@ -213,8 +213,11 @@ class Collected:
             self.rows[row["id"]] = row
 
 
-def collect(cutoff: str, *, get=get_html) -> Collected:
-    """cutoff(포함) 이후 경기를 모두 읽는다. get은 시험에서 바꿔 끼운다."""
+def collect(cutoff: str, *, listed_from: str = "", get=get_html) -> Collected:
+    """cutoff(포함) 이후 경기를 모두 읽는다. get은 시험에서 바꿔 끼운다.
+
+    listed_from: 목록이 보여 주는 첫 날(EloBoard 전적 목록은 최근 30일만). cutoff가 이날 이후면
+    목록이 cutoff 전에 끝나도 그 기간 경기는 다 본 것이다."""
     out = Collected()
 
     def fetch(path: str) -> str:
@@ -238,9 +241,9 @@ def collect(cutoff: str, *, get=get_html) -> Collected:
         return (by_name.get(name) or {}).get("category") or default
 
     def ended_early(name: str, reached: bool) -> None:
-        # 목록이 cutoff에 닿기 전에 끝났다(스폰 말고 탭 목록은 최근 30일쯤만 보인다).
-        # 그 앞 경기는 못 읽었으니 사라진 경기 판정을 막는다
-        if not reached:
+        # 목록이 cutoff에 닿기 전에 끝났다. cutoff가 목록이 보여 주는 기간 밖이면 그 앞 경기를 못 본 것이라
+        # 사라진 경기 판정을 막는다
+        if not reached and not (listed_from and cutoff >= listed_from):
             out.complete = False
             out.notes.append(f"{name}: 목록이 {cutoff}까지 닿기 전에 끝남")
 

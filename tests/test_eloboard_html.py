@@ -118,6 +118,13 @@ def test_collect_marks_incomplete_when_a_list_ends_before_the_cutoff():
     assert got.notes == ["matches kind=None: 목록이 2026-09-10까지 닿기 전에 끝남"]
 
 
+def test_list_ending_inside_the_listed_days_is_complete():
+    """목록은 최근 30일만 보여 준다. cutoff가 그 안이면 목록이 cutoff 전에 끝나도 다 본 것이다."""
+    get, _ = _site(spon_reaches_cutoff=False)
+    assert html.collect("2026-09-10", listed_from="2026-09-09", get=get).complete
+    assert not html.collect("2026-09-10", listed_from="2026-09-11", get=get).complete
+
+
 def test_collect_refuses_empty_pages():
     import pytest
 
@@ -171,8 +178,8 @@ def _setup_html(monkeypatch, rows, previous, db_window_ids=(), complete=True):
     monkeypatch.setattr(job, "SOURCE", "html")
     asked = {}
 
-    def collect(cutoff):
-        asked["cutoff"] = cutoff
+    def collect(cutoff, listed_from=""):
+        asked["cutoff"], asked["listed_from"] = cutoff, listed_from
         got = html.Collected(requests=3, complete=complete)
         got.add(rows)
         return got
@@ -217,7 +224,8 @@ def test_html_first_run_of_the_day_rescans_the_month_and_deletes(monkeypatch):
         monkeypatch, _rows(), {"deep_on": "2026-09-23", "pending_delete": [2500]}, {3000, 2900, 2500, 2400}
     )
     result = job.run()
-    assert asked["cutoff"] == "2026-09-01"
+    assert asked["cutoff"] == "2026-08-26"  # 목록이 보여 주는 30일에서 경계 날을 뺀 29일
+    assert asked["listed_from"] == "2026-08-25"
     assert saved["ids"] == [2900, 3000]
     assert saved["deleted"] == [2500]
     assert result.metadata["deep_on"] == "2026-09-24"
