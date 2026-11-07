@@ -9,6 +9,9 @@
   · 승급은 쉽게(오차를 빼도 위 경계를 2달 연속 넘으면), 강등은 드물게(오차를 더해도 아래 경계보다 반 칸 넘게
     낮은 게 3달 연속이고, 복귀 뒤 보호 경기 수를 넘겼을 때 한 칸씩).
   · 최근 90일 경기가 없으면 휴면: 티어를 얼린다.
+  · 카드군·숫자군처럼 서로 거의 안 붙는 두 무리는 데이터로 높이를 맞출 수 없다(검증 90일 경기 18.7만 판 중
+    무리 사이 45판). 그래서 누가 누구와 붙는지로 무리를 나눠(groups) 무리마다 따로 티어를 매기고,
+    무리 사이 높이 차이는 모든 기간의 무리 사이 경기로 따로 재 참고로만 적는다(group_gap).
 펨코 티어는 검증에서 비교 대상으로만 쓴다.
 """
 
@@ -159,6 +162,65 @@ def rate(folded):
     np.add.at(prec, f["wi"], info)
     np.add.at(prec, f["li"], info)
     return theta, 1 / np.sqrt(prec), race
+
+
+def groups(data, min_games=5):
+    """경기 그래프를 둘로 나눈다(정규화 라플라시안 둘째 고유벡터 부호). 반환: 선수별 0·1, 경기가 적으면 -1.
+    0번 무리 = 선수가 더 많은 쪽."""
+    n = len(data["ids"])
+    games = np.bincount(data["wi"], minlength=n) + np.bincount(data["li"], minlength=n)
+    keep = np.flatnonzero(games >= min_games)
+    pos = np.full(n, -1)
+    pos[keep] = np.arange(len(keep))
+    a, b = pos[data["wi"]], pos[data["li"]]
+    ok = (a >= 0) & (b >= 0)
+    m = len(keep)
+    adj = np.zeros((m, m))
+    np.add.at(adj, (a[ok], b[ok]), 1.0)
+    adj = adj + adj.T
+    deg = adj.sum(axis=1)
+    inv = 1 / np.sqrt(np.maximum(deg, 1e-12))
+    lap = np.eye(m) - inv[:, None] * adj * inv[None, :]
+    _, vecs = np.linalg.eigh(lap)
+    side = (vecs[:, 1] * inv > 0).astype(int)
+    if side.sum() * 2 > m:
+        side = 1 - side
+    out = np.full(n, -1)
+    out[keep] = side
+    # 경기가 적은 선수는 상대가 더 많이 속한 무리로
+    for i in np.flatnonzero((out < 0) & (games > 0)):
+        opp = np.concatenate([data["li"][data["wi"] == i], data["wi"][data["li"] == i]])
+        votes = np.bincount(out[opp][out[opp] >= 0], minlength=2)
+        if votes.sum():
+            out[i] = int(np.argmax(votes))
+    return out
+
+
+def group_gap(data, theta, group):
+    """무리 사이 높이 차이(1번 무리 기준 0번 무리가 얼마나 높은지, 로짓)와 표준오차, 경기 수, 경기 날짜 중앙값.
+    무리마다 실력을 중앙값 0으로 맞춘 뒤 모든 기간의 무리 사이 경기로 차이 하나만 맞춘다(지금 실력을 옛 경기에도
+    써서 거칠다)."""
+    gw, gl = group[data["wi"]], group[data["li"]]
+    cross = (gw >= 0) & (gl >= 0) & (gw != gl)
+    if cross.sum() < 10:
+        return None
+    centered = theta.copy()
+    for g in (0, 1):
+        mask = group == g
+        centered[mask] -= np.median(theta[mask])
+    d0 = centered[data["wi"][cross]] - centered[data["li"][cross]]
+    sign = np.where(gw[cross] == 0, 1.0, -1.0)  # 승자가 0번 무리면 +gap
+    gap = 0.0
+    for _ in range(50):  # 1차원 뉴턴
+        p = 1 / (1 + np.exp(-np.clip(d0 + sign * gap, -60, 60)))
+        grad = float(np.sum(sign * (1 - p)))
+        hess = float(np.sum(p * (1 - p)))
+        step = grad / max(hess, 1e-9)
+        gap += step
+        if abs(step) < 1e-9:
+            break
+    days = np.sort(data["day"][cross])
+    return gap, 1 / math.sqrt(max(hess, 1e-9)), int(cross.sum()), dt.date.fromordinal(int(days[len(days) // 2]))
 
 
 def active_mask(folded):

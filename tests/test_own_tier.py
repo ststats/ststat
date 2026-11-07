@@ -32,6 +32,32 @@ def test_rate_recovers_skill_order_without_tier_labels():
     assert np.all(se > 0)
 
 
+def test_groups_split_rarely_meeting_crowds_and_gap_sign():
+    """서로 거의 안 붙는 두 무리를 나누고, 무리 사이 경기로 높이 차이 부호를 맞힌다."""
+    upper = {i: 1.0 + (i - 15) * 0.1 for i in range(1, 31)}  # 높은 무리 30명
+    lower = {i: -1.0 + (i - 45) * 0.1 for i in range(31, 61)}  # 낮은 무리 30명
+    rows = _games(upper, 4000, dt.date(2026, 1, 1), 300, seed=4)
+    rows += _games(lower, 4000, dt.date(2026, 1, 1), 300, seed=5)
+    rng = random.Random(6)
+    for k in range(200):  # 무리 사이 경기는 드물고 대개 높은 무리가 이긴다
+        a, b = rng.choice(list(upper)), rng.choice(list(lower))
+        p = 1 / (1 + np.exp(-(upper[a] - lower[b])))
+        win, lose = (a, b) if rng.random() < p else (b, a)
+        rows.append([100000 + k, "2026-06-01", win, lose, None, 0])
+    skills = {**upper, **lower}
+    data = ot.prepare(rows, ["solo_event"], {str(i): [f"p{i}", "T"] for i in skills})
+    group = ot.groups(data)
+    g_of = {int(pid): int(g) for pid, g in zip(data["ids"], group)}
+    assert len({g_of[i] for i in upper}) == 1 and len({g_of[i] for i in lower}) == 1
+    assert g_of[1] != g_of[31]
+    theta, _, _ = ot.rate(ot.fold(data, dt.date(2026, 11, 1)))
+    gap, se, n, _ = ot.group_gap(data, theta, group)
+    assert n == 200
+    # 0번 무리가 높은 무리면 gap > 0
+    assert (gap > 0) == (g_of[1] == 0)
+    assert abs(abs(gap) - 2.0) < 4 * se + 0.5
+
+
 def test_bands_split_by_win_rate_and_error():
     theta = np.linspace(-2, 2, 200)
     se = np.full(200, 0.1)
@@ -116,6 +142,6 @@ def test_report_runs_end_to_end(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["own_tier_report.py", "--months", "6", "--out", str(tmp_path)])
     rep.main()
     report = (tmp_path / "report.md").read_text(encoding="utf-8")
-    assert "## 지금 티어표" in report and "## 검증" in report and "**전체**" in report
+    assert "1그룹 티어표" in report and "2그룹 티어표" in report and "## 검증" in report
     lines = (tmp_path / "table.csv").read_text(encoding="utf-8-sig").splitlines()
     assert len(lines) == 61
