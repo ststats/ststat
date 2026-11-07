@@ -32,6 +32,8 @@ SPONSORED = "sponsored"
 TAB_KINDS = ("jungjang", "kkeutjang", "myeolmang")
 TAB_GROUPS = {"team", "pro_league", *TAB_KINDS}
 MAX_LIST_PAGES = 400  # 목록 한 탭에서 넘길 최대 쪽 수(30일치 스폰이 약 180쪽)
+# 앞단 캐시(nginx)가 가끔 원본 데이터 없는 페이지를 준다. 그때만 주소에 값을 붙여 캐시를 피해 다시 받는다
+REFETCH_TRIES = 2
 
 _PUSH_RE = re.compile(r"self\.__next_f\.push\(\[1,\"(.*?)\"\]\)", re.DOTALL)
 _last_request = 0.0
@@ -202,6 +204,7 @@ class Collected:
     rows: dict[int, dict] = field(default_factory=dict)
     skipped: int = 0  # 2:2 등 받지 않는 모양
     requests: int = 0
+    refetched: int = 0  # 데이터 없는 캐시 페이지라 다시 받은 수
     complete: bool = True  # 기간 처음까지 다 읽었는가(아니면 사라진 경기 판정을 하지 않는다)
     notes: list[str] = field(default_factory=list)
 
@@ -215,8 +218,14 @@ def collect(cutoff: str, *, get=get_html) -> Collected:
     out = Collected()
 
     def fetch(path: str) -> str:
-        out.requests += 1
-        return page_data(get(path))
+        for attempt in range(REFETCH_TRIES + 1):
+            out.requests += 1
+            html = get(path if attempt == 0 else f"{path}{'&' if '?' in path else '?'}_={time.time_ns()}")
+            if _PUSH_RE.search(html):
+                return page_data(html)
+            out.refetched += 1
+        # 데이터 없는 페이지를 '목록 끝'·'경기 없음'으로 읽으면 안 되니 쓰지 않고 멈춘다
+        raise RuntimeError(f"EloBoard 페이지에 원본 데이터가 없습니다({REFETCH_TRIES}번 다시 받음): {path}")
 
     events = {e["id"]: e for arr in json_arrays(fetch("/events"), "events") for e in arr if isinstance(e, dict)}
     if not events:

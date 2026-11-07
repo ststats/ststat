@@ -125,6 +125,38 @@ def test_collect_refuses_empty_pages():
         html.collect("2026-09-10", get=lambda path: _page({"duels": []}))
 
 
+def test_cached_page_without_data_is_refetched_past_the_cache():
+    """앞단 캐시가 데이터 없는 페이지를 주면 주소에 값을 붙여 다시 받는다."""
+    import re
+
+    get, _ = _site()
+    lite = {"/matches?kind=team"}
+    sent = []
+
+    def flaky(path):
+        sent.append(path)
+        if path in lite:
+            lite.discard(path)
+            return "<html>전적 목록</html>"
+        return get(re.sub(r"[&?]_=\d+$", "", path))
+
+    got = html.collect("2026-09-10", get=flaky)
+    assert got.refetched == 1 and got.complete
+    assert 2912970 in got.rows  # 다시 받은 팀 탭의 경기
+    i = sent.index("/matches?kind=team")
+    assert re.fullmatch(r"/matches\?kind=team&_=\d+", sent[i + 1])
+
+
+def test_page_that_never_has_data_stops_the_run():
+    import pytest
+
+    get, _ = _site()
+    with pytest.raises(RuntimeError, match="원본 데이터가 없습니다"):
+        html.collect(
+            "2026-09-10", get=lambda path: "<html></html>" if path.startswith("/matches?kind=war") else get(path)
+        )
+
+
 def test_page_data_inlines_lazy_rows():
     """뒤에 따로 실린 조각은 제자리에 끼우고, 컴포넌트 자리("$","$L..")는 그대로 둔다."""
     data = html.page_data(_page('0:["$","$L1d",{"x":"$L1c"}]\n1c:{"a":1}'))

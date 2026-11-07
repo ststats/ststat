@@ -184,6 +184,7 @@ def run_html() -> JobResult:
             "deep_on": today_kst.isoformat() if deep else previous.get("deep_on"),
             "rescan_from": cutoff,
             "requests": got.requests,
+            "refetched": got.refetched,
             "complete": got.complete,
             "notes": got.notes[:30],
             "unsupported_skipped": got.skipped,
