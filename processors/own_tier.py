@@ -6,8 +6,10 @@
   · 형식 가중치·종족 상성은 staruniv_ranking과 같다.
   · 티어 한 칸 = 붙으면 위 칸이 약 62% 이기는 실력 차(로짓 0.49), 그리고 활동 선수 표준오차 중앙값의 2배 이상.
     칸 수는 활동 선수 실력 폭이 정한다.
-  · 승급은 쉽게(오차를 빼도 위 경계를 2달 연속 넘으면), 강등은 드물게(오차를 더해도 아래 경계보다 반 칸 넘게
-    낮은 게 3달 연속이고, 복귀 뒤 보호 경기 수를 넘겼을 때 한 칸씩).
+  · 이 판은 몇 년째 강등이 없다. 그래서 티어 = 도달한 티어(내리지 않음)이고, 지금 실력이 몇 칸인지와
+    '하락세'(지금 실력이 한 칸 넘게 아래인 게 DECLINE_MONTHS달 연속)는 따로 보인다.
+  · 내리지 않으니 잘못 올리면 굳는다. 처음 칸도 승급도 오차를 뺀 점수(θ - z·표준오차)로 정하고,
+    승급은 그 점수가 위 경계를 up_months달 연속 넘을 때만 한다.
   · 최근 90일 경기가 없으면 휴면: 티어를 얼린다.
   · 카드군·숫자군처럼 서로 거의 안 붙는 두 무리는 데이터로 높이를 맞출 수 없다(검증 90일 경기 18.7만 판 중
     무리 사이 45판). 그래서 누가 누구와 붙는지로 무리를 나눠(groups) 무리마다 따로 티어를 매기고,
@@ -36,9 +38,8 @@ DORMANT_DAYS = 90
 MIN_GAMES = 20  # 최근 1년 이만큼 두어야 '확정'(아니면 잠정)
 MAX_SE = 0.45  # 표준오차가 이보다 크면 잠정
 TIER_STEP_WIN = 0.62  # 한 칸 위와 붙었을 때 위 칸 승률
-Z_UP, UP_MONTHS = 1.0, 2
-Z_DOWN, DOWN_MONTHS, DOWN_MARGIN = 1.0, 3, 0.5
-RETURN_PROTECT_GAMES = 20  # 휴면 복귀 뒤 이만큼 둘 때까지 강등하지 않는다
+Z_UP, UP_MONTHS = 1.5, 3  # 승급: 오차 몇 배를 뺀 점수가 몇 달 연속 위 경계를 넘어야 하나(보고서가 다른 값과 견준다)
+DECLINE_MONTHS = 3
 TIER_NAMES = "SABCDEFGHIJKLMN"
 
 
@@ -248,33 +249,27 @@ def band_bounds(k, top, width):
     return top - (k + 1) * width, top - k * width
 
 
-def assign(timeline, top, width, count):
-    """월별 [(θ, 표준오차, 활동 여부, 확정 여부, 누적 경기 수)]에 승급은 쉽게·강등은 드물게 규칙을 적용한다.
-    반환: 월별 (칸 번호, 상태 '확정'·'잠정'·'휴면'). 잠정은 실력 그대로의 칸을 보여 주되 굳히지 않는다."""
-    tier, up, down, return_at, was_active, out = None, 0, 0, None, True, []
-    for theta, se, active, sure, total in timeline:
+def assign(timeline, top, width, count, z_up=Z_UP, up_months=UP_MONTHS):
+    """월별 [(θ, 표준오차, 활동 여부, 확정 여부)]에 '도달 티어' 규칙을 적용한다.
+    반환: 월별 (도달 칸, 상태 '확정'·'잠정'·'휴면', 지금 실력 칸, 하락세 여부). 잠정은 칸을 보여 주되 굳히지 않는다."""
+    tier, up, low, out = None, 0, 0, []
+    for theta, se, active, sure, *_ in timeline:
+        now = band_of(theta, top, width, count)
+        proven = band_of(theta - z_up * se, top, width, count)
         if not active:
-            out.append((tier, "휴면"))
-            was_active, up, down = False, 0, 0
+            out.append((tier, "휴면", now, False))
+            up = low = 0
             continue
-        if not was_active and tier is not None:
-            return_at = total
-        was_active = True
         if tier is None:
-            here = band_of(theta, top, width, count)
-            out.append((here, "확정" if sure else "잠정"))
+            out.append((proven, "확정" if sure else "잠정", now, False))
             if sure:
-                tier = here
+                tier = proven
             continue
-        low, high = band_bounds(tier, top, width)
-        up = up + 1 if tier > 0 and theta - Z_UP * se >= high else 0
-        down = down + 1 if tier < count - 1 and theta + Z_DOWN * se < low - DOWN_MARGIN * width else 0
-        protected = return_at is not None and total - return_at < RETURN_PROTECT_GAMES
-        if up >= UP_MONTHS:
-            tier, up = min(tier - 1, band_of(theta - Z_UP * se, top, width, count)), 0
-        elif down >= DOWN_MONTHS and not protected:
-            tier, down = tier + 1, 0
-        out.append((tier, "확정" if sure else "잠정"))
+        up = up + 1 if proven < tier else 0
+        if up >= up_months:
+            tier, up = proven, 0
+        low = low + 1 if now > tier else 0
+        out.append((tier, "확정" if sure else "잠정", now, low >= DECLINE_MONTHS))
     return out
 
 

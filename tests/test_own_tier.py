@@ -70,35 +70,37 @@ def test_bands_split_by_win_rate_and_error():
     assert ot.bands(theta, np.full(200, 0.4), np.ones(200, dtype=bool))[2] < count
 
 
-def _tl(values, se=0.1, active=True, sure=True, start_games=50):
-    return [(v, se, active, sure, start_games + 10 * k) for k, v in enumerate(values)]
+def _tl(values, se=0.1, active=True, sure=True):
+    return [(v, se, active, sure) for v in values]
 
 
-def test_promotion_needs_two_months_and_demotion_three():
-    top, width, count = 1.0, 0.5, 6  # 칸 1 = (0.0, 0.5]
-    mid = 0.25
-    up = ot.assign(_tl([mid, 0.75, mid, 0.75, 0.75]), top, width, count)
-    assert [k for k, _ in up] == [1, 1, 1, 1, 0]  # 한 달만 넘은 건 무시, 2달 연속이면 승급
-    # 아래 경계(0.0)보다 반 칸(0.25) 넘게 낮아야 하고 3달 연속이어야 강등, 한 칸씩
-    down = ot.assign(_tl([mid, -0.2, -0.6, -0.6, -0.6, -2.0, -2.0, -2.0]), top, width, count)
-    assert [k for k, _ in down] == [1, 1, 1, 1, 2, 2, 2, 3]
+def test_start_and_promotion_use_score_minus_error():
+    """처음 칸·승급 모두 오차를 뺀 점수로 정하고, 승급은 up_months달 연속이어야 한다."""
+    top, width, count = 1.0, 0.5, 6  # 칸 0 = 0.5 위, 칸 1 = (0.0, 0.5]
+    # 점수 0.6은 칸 0이지만 오차 0.1을 빼면 0.5 아래라 칸 1에서 시작한다
+    assert ot.assign(_tl([0.6]), top, width, count, z_up=1.0)[0][0] == 1
+    run = ot.assign(_tl([0.25, 0.8, 0.25, 0.8, 0.8, 0.8]), top, width, count, z_up=1.0, up_months=3)
+    assert [k for k, *_ in run] == [1, 1, 1, 1, 1, 0]  # 3달 연속 넘어야 승급
 
 
-def test_dormant_freezes_and_return_protects_from_demotion():
+def test_never_demoted_but_decline_is_flagged():
     top, width, count = 1.0, 0.5, 6
-    tl = _tl([0.25, 0.25]) + [(0.25, 0.1, False, False, 70)] * 2
-    # 복귀한 달 누적 80판. 강등 조건(3달 연속)은 6번째 달에 차지만 복귀 뒤 20판이 안 돼 미룬다
-    tl += [(-0.9, 0.1, True, True, g) for g in (80, 85, 90, 95, 105)]
-    out = ot.assign(tl, top, width, count)
-    assert [s for _, s in out][2:4] == ["휴면", "휴면"]
-    assert [k for k, _ in out][:4] == [1, 1, 1, 1]  # 휴면 동안 그대로
-    assert [k for k, _ in out][4:] == [1, 1, 1, 1, 2]  # 복귀 뒤 10·15판은 보호, 25판에 강등
+    out = ot.assign(_tl([0.25, -0.3, -0.3, -0.3, -0.3]), top, width, count, z_up=1.0)
+    assert [k for k, *_ in out] == [1, 1, 1, 1, 1]  # 내리지 않는다
+    assert [now for _, _, now, _ in out] == [1, 2, 2, 2, 2]  # 지금 실력 칸은 따로
+    assert [d for *_, d in out] == [False, False, False, True, True]  # 3달 연속 한 칸 아래면 하락세
+
+
+def test_dormant_freezes_tier():
+    top, width, count = 1.0, 0.5, 6
+    out = ot.assign(_tl([0.25]) + [(-2.0, 0.1, False, False)] * 2 + _tl([0.25]), top, width, count, z_up=1.0)
+    assert [(k, s) for k, s, *_ in out] == [(1, "확정"), (1, "휴면"), (1, "휴면"), (1, "확정")]
 
 
 def test_provisional_shows_band_but_does_not_lock():
     top, width, count = 1.0, 0.5, 6
-    out = ot.assign(_tl([0.75, 0.25], sure=False), top, width, count)
-    assert out == [(0, "잠정"), (1, "잠정")]
+    out = ot.assign(_tl([0.85, 0.25], sure=False), top, width, count, z_up=1.0)
+    assert [(k, s) for k, s, *_ in out] == [(0, "잠정"), (1, "잠정")]
 
 
 def test_report_runs_end_to_end(tmp_path, monkeypatch):
@@ -141,7 +143,11 @@ def test_report_runs_end_to_end(tmp_path, monkeypatch):
     monkeypatch.setattr(ds, "load_source_data", lambda: source)
     monkeypatch.setattr(sys, "argv", ["own_tier_report.py", "--months", "6", "--out", str(tmp_path)])
     rep.main()
-    report = (tmp_path / "report.md").read_text(encoding="utf-8")
-    assert "1그룹 티어표" in report and "2그룹 티어표" in report and "## 검증" in report
-    lines = (tmp_path / "table.csv").read_text(encoding="utf-8-sig").splitlines()
-    assert len(lines) == 61
+    import json
+
+    report = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
+    assert [g["label"] for g in report["groups"]] == ["1그룹", "2그룹"]
+    assert report["groups"][1]["names"][:3] == ["0", "1", "2"]  # 2그룹은 숫자
+    assert len(report["variants"]) == 4 and report["validation"]["rows"]
+    assert "## 1그룹" in (tmp_path / "report.md").read_text(encoding="utf-8")
+    assert (tmp_path / "table.csv").read_text(encoding="utf-8-sig").startswith("elo_id,name,group,tier,now")
