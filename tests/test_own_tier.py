@@ -24,7 +24,7 @@ def test_rate_recovers_skill_order_without_tier_labels():
     skills = {i: (i - 10) * 0.3 for i in range(1, 21)}
     rows = _games(skills, 6000, dt.date(2026, 1, 1), 300)
     data = ot.prepare(rows, ["solo_event"], {str(i): [f"p{i}", "T"] for i in skills})
-    theta, se, _ = ot.rate(ot.fold(data, dt.date(2026, 11, 1)))
+    theta, se, _, _ = ot.rate(ot.fold(data, dt.date(2026, 11, 1)))
     order = [int(data["ids"][i]) for i in np.argsort(-theta)]
     # 이웃끼리는 뒤바뀔 수 있어도 위·아래 다섯은 제자리
     assert set(order[:5]) == {16, 17, 18, 19, 20}
@@ -50,7 +50,7 @@ def test_groups_split_rarely_meeting_crowds_and_gap_sign():
     g_of = {int(pid): int(g) for pid, g in zip(data["ids"], group)}
     assert len({g_of[i] for i in upper}) == 1 and len({g_of[i] for i in lower}) == 1
     assert g_of[1] != g_of[31]
-    theta, _, _ = ot.rate(ot.fold(data, dt.date(2026, 11, 1)))
+    theta, _, _, _ = ot.rate(ot.fold(data, dt.date(2026, 11, 1)))
     gap, se, n, _ = ot.group_gap(data, theta, group)
     assert n == 200
     # 0번 무리가 높은 무리면 gap > 0

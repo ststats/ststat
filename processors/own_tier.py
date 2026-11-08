@@ -148,7 +148,7 @@ def _fit(wi, li, w, n, prior, offset, ridx=None, rsign=None):
 
 
 def rate(folded):
-    """실력 θ, 표준오차(폼 창 조건부 근사), 종족 상성."""
+    """실력 θ, 표준오차(폼 창 조건부 근사), 종족 상성, 폼 δ(θ 중 최근 90일 몫)."""
     f = folded
     n = f["n"]
     base, race = _fit(f["wi"], f["li"], f["w_base"], n, 1 / SIGMA_BASE**2, 0.0, f["ridx"], f["rsign"])
@@ -161,7 +161,7 @@ def rate(folded):
     prec = np.full(n, 1 / SIGMA_FORM**2)
     np.add.at(prec, f["wi"], info)
     np.add.at(prec, f["li"], info)
-    return theta, 1 / np.sqrt(prec), race
+    return theta, 1 / np.sqrt(prec), race, form
 
 
 def groups(data, min_games=5):

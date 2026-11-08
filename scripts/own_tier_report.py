@@ -47,6 +47,75 @@ def official_index(pids, day, ladders, index):
     return out
 
 
+def explain_gaps(data, ids, group, label, kname, live, last, ladders, index, last_day):
+    """펨코 티어가 같은 선수들이 보통 놓이는 칸(중앙값)과 2칸 이상 다른 명단 확정 선수를 근거와 함께 적는다."""
+    off = official_index(ids, last_day, ladders, index)
+    pos = {pid: i for i, pid in enumerate(ids)}
+    t = last_day.toordinal()
+    year = data["day"] > t - 365
+    recent = data["day"] > t - 90
+    sure = [r for r in live if r["roster"] and r["status"] == "확정" and r["official"] in TIER_ORDER]
+    usual = {}
+    for r in sure:
+        usual.setdefault((r["_g"], r["official"]), []).append(r["_k"])
+    usual = {key: float(np.median(v)) for key, v in usual.items()}
+    picked = [r for r in sure if abs(r["_k"] - usual[(r["_g"], r["official"])]) >= 2]
+    picked.sort(key=lambda r: (label[r["_g"]], -abs(r["_k"] - usual[(r["_g"], r["official"])])))
+    lines = [
+        "## 펨코 티어와 2칸 이상 다른 선수: 왜 그렇게 나왔나",
+        "",
+        "보통 칸 = 같은 펨코 티어인 확정 선수들의 자체 티어 중앙값. 전적은 최근 1년(같은 그룹 상대).",
+        "",
+        "| 선수 | 펨코 | 자체(보통) | 점수±오차 | 1년 전적 | 같은 펨코 티어 상대 | 위 펨코 티어 상대 | 최근 90일 | 폼 | 근거 |",
+        "|---|---|---|---|---|---|---|---|---|---|",
+    ]
+    for r in picked:
+        i, g = pos[r["elo_id"]], r["_g"]
+        me = off[i]
+
+        def record(mask, cond, i=i, g=g):
+            wins = mask & (data["wi"] == i)
+            losses = mask & (data["li"] == i)
+            ow, ol = data["li"][wins], data["wi"][losses]
+            return int((cond(ow) & (group[ow] == g)).sum()), int((cond(ol) & (group[ol] == g)).sum())
+
+        def everyone(o):
+            return np.ones(len(o), dtype=bool)
+
+        def same(o, me=me):
+            return off[o] == me
+
+        def above(o, me=me):
+            return (off[o] >= 0) & (off[o] < me)
+
+        def text(w, lo):
+            return f"{w}승 {lo}패 ({w / (w + lo):.0%})" if w + lo else "-"
+
+        y, sm, ab, rc = record(year, everyone), record(year, same), record(year, above), record(recent, everyone)
+        form = float(last["form"][i]) * SCORE_SCALE
+        exp = usual[(g, r["official"])]
+        higher = r["_k"] < exp
+        why = []
+        if sum(sm) >= 10 and (sm[0] / sum(sm) >= 0.6) == higher and (sm[0] / sum(sm) <= 0.4) != higher:
+            why.append(f"같은 {r['official']}티어 상대 {sm[0] / sum(sm):.0%}")
+        if sum(ab) >= 5 and higher and ab[0] / sum(ab) >= 0.45:
+            why.append(f"위 티어 상대도 {ab[0] / sum(ab):.0%}")
+        if abs(form) >= 40 and (form > 0) == higher:
+            why.append(f"최근 폼 {form:+.0f}점")
+        if r["se"] >= 60:
+            why.append(f"오차 ±{r['se']}점으로 덜 확실")
+        if not why:
+            why.append("여러 상대와의 전적이 고르게 " + ("좋음" if higher else "나쁨"))
+        lines.append(
+            f"| {r['name']} | {r['official']} | {kname(g, r['_k'])}({kname(g, round(exp))}) | {r['score']}±{r['se']} | "
+            f"{text(*y)} | {text(*sm)} | {text(*ab)} | {text(*rc)} | {form:+.0f} | {', '.join(why)} |"
+        )
+    if not picked:
+        lines.append("| (없음) |  |  |  |  |  |  |  |  |  |")
+    lines.append("")
+    return lines
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--months", type=int, default=18)
@@ -68,10 +137,21 @@ def main():
     fits = []
     for as_of in months:
         f = ot.fold(data, as_of)
-        theta, se, race = ot.rate(f)
+        theta, se, race, form = ot.rate(f)
         active = ot.active_mask(f)
         sure = active & (f["games"] >= ot.MIN_GAMES) & (se <= ot.MAX_SE)
-        fits.append({"as_of": as_of, "f": f, "theta": theta, "se": se, "race": race, "active": active, "sure": sure})
+        fits.append(
+            {
+                "as_of": as_of,
+                "f": f,
+                "theta": theta,
+                "se": se,
+                "race": race,
+                "form": form,
+                "active": active,
+                "sure": sure,
+            }
+        )
         print(f"  {as_of}: 활동 {int(active.sum()):,}명 · 확정 {int(sure.sum()):,}명", flush=True)
 
     # 무리 나누기(누가 누구와 붙는지). 높은 쪽(무리 사이 경기로 잰 높이)을 1그룹으로 부른다
@@ -132,8 +212,12 @@ def main():
             "",
         ]
 
+    # 1그룹은 글자(S·A·B…), 2그룹은 숫자(0·1·2…)로 부른다
+    def kname(g, k):
+        return ot.TIER_NAMES[k] if g == first else str(k)
+
     def tier_name(i, k):
-        return f"{label[group[i]]} {ot.TIER_NAMES[k]}" if k is not None else "-"
+        return f"{label[group[i]]} {kname(group[i], k)}" if k is not None else "-"
 
     rows = []
     for i, tl in timelines.items():
@@ -170,11 +254,11 @@ def main():
             here = sorted((r for r in here_g if r["_k"] == k), key=lambda r: -r["_theta"])
             named = [f"{r['name']}({r['official'] or '?'})" for r in here if r["roster"] and r["status"] == "확정"][:10]
             lines.append(
-                f"| {ot.TIER_NAMES[k]} | {sum(r['status'] == '확정' for r in here)} | "
+                f"| {kname(g, k)} | {sum(r['status'] == '확정' for r in here)} | "
                 f"{sum(r['status'] == '잠정' for r in here)} | {', '.join(named)} |"
             )
         lines += ["", "펨코 티어와 맞대기(명단 확정 선수, 칸 = 인원):", ""]
-        lines.append("| 펨코 \\ 자체 | " + " | ".join(ot.TIER_NAMES[:count]) + " |")
+        lines.append("| 펨코 \\ 자체 | " + " | ".join(kname(g, k) for k in range(count)) + " |")
         lines.append("|---" * (count + 1) + "|")
         sure_roster = [r for r in here_g if r["roster"] and r["status"] == "확정" and r["official"] in TIER_ORDER]
         for t in TIER_ORDER:
@@ -183,6 +267,7 @@ def main():
                 lines.append(f"| {t} | " + " | ".join(str(c) if c else "" for c in cnt) + " |")
         lines.append("")
     lines += [f"휴면 {sum(r['status'] == '휴면' for r in rows):,}명은 표에서 뺐다. 괄호는 펨코 티어(비교용).", ""]
+    lines += explain_gaps(data, ids, group, label, kname, live, last, ladders, index, last_day)
 
     # 검증: 그 달까지로 만든 티어로 다음 90일 같은 그룹 경기 맞히기
     lines += ["## 검증: 다음 90일 같은 그룹 경기 맞히기(로그손실, 낮을수록 좋음)", "",
