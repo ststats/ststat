@@ -161,6 +161,7 @@ def test_report_runs_end_to_end(tmp_path, monkeypatch):
 
     report = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
     assert [g["label"] for g in report["groups"]] == ["1그룹", "2그룹"]
+    assert report["groups"][0]["names"][:2] == ["갓", "킹"]  # 1그룹은 카드 이름
     assert report["groups"][1]["names"][:3] == ["0", "1", "2"]  # 2그룹은 숫자
     assert len(report["variants"]) == 4 and report["validation"]["rows"]
     assert "## 1그룹" in (tmp_path / "report.md").read_text(encoding="utf-8")

@@ -40,7 +40,9 @@ MAX_SE = 0.45  # 표준오차가 이보다 크면 잠정
 TIER_STEP_WIN = 0.62  # 한 칸 위와 붙었을 때 위 칸 승률
 Z_UP, UP_MONTHS = 1.5, 3  # 승급: 오차 몇 배를 뺀 점수가 몇 달 연속 위 경계를 넘어야 하나(보고서가 다른 값과 견준다)
 DECLINE_MONTHS = 3
-TIER_NAMES = "SABCDEFGHIJKLMN"
+TIER_NAMES = "SABCDEFGHIJKLMN"  # 칸 수 상한(이름은 보고서가 붙인다)
+# 1그룹(카드군) 칸 이름. 칸이 이보다 많으면 '스페이드2'처럼 잇는다
+CARD_NAMES = ("갓", "킹", "잭", "조커", "스페이드")
 
 
 def logit(p):

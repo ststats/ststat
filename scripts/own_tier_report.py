@@ -255,9 +255,12 @@ def build(store, index, ladders, months_back, alias=None):
     align(fits, group)
     band = {g: ot.bands(last["theta"][group == g], last["se"][group == g], last["sure"][group == g]) for g in (0, 1)}
 
-    # 1그룹은 글자(S·A·B…), 2그룹은 숫자(0·1·2…)
+    # 1그룹은 갓·킹·잭·조커·스페이드, 2그룹은 숫자(0·1·2…)
     def kname(g, k):
-        return ot.TIER_NAMES[k] if g == first else str(k)
+        if g != first:
+            return str(k)
+        names = ot.CARD_NAMES
+        return names[k] if k < len(names) else f"{names[-1]}{k - len(names) + 2}"
 
     variants = []
     for z, m in VARIANTS:
