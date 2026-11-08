@@ -4,8 +4,8 @@
   · 실력 θ = 긴 창(반감기 540일) 바탕 b + 짧은 창(90일) 폼 δ. 카드군·숫자군을 잇는 경기는 대부분 옛날 것이라
     긴 창이 두 군의 높이를, 짧은 창이 지금 폼을 맡는다(staruniv_ranking과 같은 2단, 기준선만 데이터에서).
   · 형식 가중치·종족 상성은 staruniv_ranking과 같다.
-  · 티어 한 칸 = 붙으면 위 칸이 약 62% 이기는 실력 차(로짓 0.49), 그리고 활동 선수 표준오차 중앙값의 2배 이상.
-    칸 수는 활동 선수 실력 폭이 정한다.
+  · 티어 한 칸 = 붙으면 위 칸이 약 62% 이기는 실력 차(로짓 0.49), 그리고 그 구간 확정 선수 표준오차 중앙값의
+    2배 이상. 오차가 큰 아래쪽은 칸이 넓어진다. 칸 수는 실력 폭이 정한다.
   · 이 판은 몇 년째 강등이 없다. 그래서 티어 = 도달한 티어(내리지 않음)이고, 지금 실력이 몇 칸인지와
     '하락세'(지금 실력이 한 칸 넘게 아래인 게 DECLINE_MONTHS달 연속)는 따로 보인다.
   · 내리지 않으니 잘못 올리면 굳는다. 처음 칸도 승급도 오차를 뺀 점수(θ - z·표준오차)로 정하고,
@@ -228,34 +228,63 @@ def active_mask(folded):
     return (folded["as_of"] - folded["last"]) <= DORMANT_DAYS
 
 
-def bands(theta, se, active):
-    """(기준점, 칸 폭, 칸 수). 기준점 = 확정 활동 선수 실력 중앙값. 0번 칸(S)이 가장 높다."""
-    sure = active & (se <= MAX_SE)
+class Bands:
+    """칸 경계. k번 칸 = [lowers[k], uppers[k]). 0번 칸(가장 높음)은 위로, 마지막 칸은 아래로 열려 있다."""
+
+    def __init__(self, lowers, uppers):
+        self.lowers, self.uppers = list(lowers), list(uppers)
+        self.count = len(self.lowers)
+
+    @classmethod
+    def even(cls, top, width, count):
+        return cls([top - (k + 1) * width for k in range(count)], [top - k * width for k in range(count)])
+
+
+def bands(theta, se, sure):
+    """확정 선수(sure)로 칸을 나눈다. 위에서부터 한 칸씩, 폭 = 승률 기준(TIER_STEP_WIN)과
+    그 구간 확정 선수 표준오차 중앙값의 2배 중 큰 쪽. 아래쪽처럼 오차가 큰 구간은 칸이 넓어져
+    옆 칸과 확실히 구별될 때만 나뉜다. 잠정 선수는 칸 수를 정하는 데 쓰지 않는다."""
     if sure.sum() < 10:
-        sure = active
-    width = max(logit(TIER_STEP_WIN), 2 * float(np.median(se[sure])))
-    lo, hi = np.quantile(theta[sure], [0.005, 0.995])
-    top = float(hi)
-    count = max(1, min(len(TIER_NAMES), math.ceil((top - float(lo)) / width)))
-    return top, width, count
+        sure = np.ones(len(theta), dtype=bool)
+    t, e = theta[sure], se[sure]
+    lo, hi = (float(x) for x in np.quantile(t, [0.005, 0.995]))
+    step = logit(TIER_STEP_WIN)
+    lowers, uppers, upper = [], [], hi
+    while upper > lo and len(lowers) < len(TIER_NAMES):
+        width = step
+        for _ in range(2):  # 구간 선수로 폭을 정하고, 넓어진 구간으로 한 번 더
+            inside = (t <= upper) & (t > upper - width)
+            if inside.sum() >= 3:
+                width = max(step, 2 * float(np.median(e[inside])))
+        uppers.append(upper)
+        lowers.append(upper - width)
+        upper -= width
+    return Bands(lowers, uppers)
 
 
-def band_of(value, top, width, count):
-    return int(min(count - 1, max(0, math.floor((top - value) / width))))
+def band_of(value, b):
+    for k, low in enumerate(b.lowers):
+        if value >= low:
+            return k
+    return b.count - 1
 
 
-def band_bounds(k, top, width):
-    """k번 칸의 (아래, 위) 경계. 맨 위·맨 아래 칸은 열려 있다."""
-    return top - (k + 1) * width, top - k * width
+def band_bounds(k, b):
+    """k번 칸의 (아래, 위) 경계."""
+    return b.lowers[k], b.uppers[k]
 
 
-def assign(timeline, top, width, count, z_up=Z_UP, up_months=UP_MONTHS):
+def band_mid(k, b):
+    return (b.lowers[k] + b.uppers[k]) / 2
+
+
+def assign(timeline, b, z_up=Z_UP, up_months=UP_MONTHS):
     """월별 [(θ, 표준오차, 활동 여부, 확정 여부)]에 '도달 티어' 규칙을 적용한다.
     반환: 월별 (도달 칸, 상태 '확정'·'잠정'·'휴면', 지금 실력 칸, 하락세 여부). 잠정은 칸을 보여 주되 굳히지 않는다."""
     tier, up, low, out = None, 0, 0, []
     for theta, se, active, sure, *_ in timeline:
-        now = band_of(theta, top, width, count)
-        proven = band_of(theta - z_up * se, top, width, count)
+        now = band_of(theta, b)
+        proven = band_of(theta - z_up * se, b)
         if not active:
             out.append((tier, "휴면", now, False))
             up = low = 0

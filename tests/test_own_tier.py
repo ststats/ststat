@@ -58,16 +58,22 @@ def test_groups_split_rarely_meeting_crowds_and_gap_sign():
     assert abs(abs(gap) - 2.0) < 4 * se + 0.5
 
 
-def test_bands_split_by_win_rate_and_error():
+def test_bands_split_by_win_rate_and_widen_where_error_is_large():
     theta = np.linspace(-2, 2, 200)
-    se = np.full(200, 0.1)
-    top, width, count = ot.bands(theta, se, np.ones(200, dtype=bool))
-    assert abs(width - ot.logit(ot.TIER_STEP_WIN)) < 1e-9  # 오차가 작으면 승률 기준
-    assert count == 9  # 실력 폭 약 3.96 / 0.49
-    assert ot.band_of(2.5, top, width, count) == 0
-    assert ot.band_of(-5, top, width, count) == count - 1
-    # 오차가 크면 칸을 넓혀 칸 수가 준다
-    assert ot.bands(theta, np.full(200, 0.4), np.ones(200, dtype=bool))[2] < count
+    sure = np.ones(200, dtype=bool)
+    b = ot.bands(theta, np.full(200, 0.1), sure)
+    widths = np.array(b.uppers) - np.array(b.lowers)
+    assert np.allclose(widths, ot.logit(ot.TIER_STEP_WIN))  # 오차가 작으면 승률 기준
+    assert b.count == 9  # 실력 폭 약 3.96 / 0.49
+    assert ot.band_of(2.5, b) == 0 and ot.band_of(-5, b) == b.count - 1
+    # 아래 절반만 오차가 크면 아래 칸만 넓어져 칸 수가 준다
+    se = np.where(theta < 0, 0.6, 0.1)
+    wide = ot.bands(theta, se, sure)
+    w2 = np.array(wide.uppers) - np.array(wide.lowers)
+    assert wide.count < b.count
+    assert w2[0] == widths[0] and w2[-1] > 2 * widths[0]
+    # 잠정(sure 아님) 선수는 칸 나누기에 쓰지 않는다
+    assert ot.bands(theta, se, theta >= 0).count <= 5
 
 
 def _tl(values, se=0.1, active=True, sure=True):
@@ -76,30 +82,30 @@ def _tl(values, se=0.1, active=True, sure=True):
 
 def test_start_and_promotion_use_score_minus_error():
     """처음 칸·승급 모두 오차를 뺀 점수로 정하고, 승급은 up_months달 연속이어야 한다."""
-    top, width, count = 1.0, 0.5, 6  # 칸 0 = 0.5 위, 칸 1 = (0.0, 0.5]
-    # 점수 0.6은 칸 0이지만 오차 0.1을 빼면 0.5 아래라 칸 1에서 시작한다
-    assert ot.assign(_tl([0.6]), top, width, count, z_up=1.0)[0][0] == 1
-    run = ot.assign(_tl([0.25, 0.8, 0.25, 0.8, 0.8, 0.8]), top, width, count, z_up=1.0, up_months=3)
+    b = ot.Bands.even(1.0, 0.5, 6)  # 칸 0 = 0.5 위, 칸 1 = [0.0, 0.5)
+    # 점수 0.55는 칸 0이지만 오차 0.1을 빼면 0.5 아래라 칸 1에서 시작한다
+    assert ot.assign(_tl([0.55]), b, z_up=1.0)[0][0] == 1
+    run = ot.assign(_tl([0.25, 0.8, 0.25, 0.8, 0.8, 0.8]), b, z_up=1.0, up_months=3)
     assert [k for k, *_ in run] == [1, 1, 1, 1, 1, 0]  # 3달 연속 넘어야 승급
 
 
 def test_never_demoted_but_decline_is_flagged():
-    top, width, count = 1.0, 0.5, 6
-    out = ot.assign(_tl([0.25, -0.3, -0.3, -0.3, -0.3]), top, width, count, z_up=1.0)
+    b = ot.Bands.even(1.0, 0.5, 6)
+    out = ot.assign(_tl([0.25, -0.3, -0.3, -0.3, -0.3]), b, z_up=1.0)
     assert [k for k, *_ in out] == [1, 1, 1, 1, 1]  # 내리지 않는다
     assert [now for _, _, now, _ in out] == [1, 2, 2, 2, 2]  # 지금 실력 칸은 따로
     assert [d for *_, d in out] == [False, False, False, True, True]  # 3달 연속 한 칸 아래면 하락세
 
 
 def test_dormant_freezes_tier():
-    top, width, count = 1.0, 0.5, 6
-    out = ot.assign(_tl([0.25]) + [(-2.0, 0.1, False, False)] * 2 + _tl([0.25]), top, width, count, z_up=1.0)
+    b = ot.Bands.even(1.0, 0.5, 6)
+    out = ot.assign(_tl([0.25]) + [(-2.0, 0.1, False, False)] * 2 + _tl([0.25]), b, z_up=1.0)
     assert [(k, s) for k, s, *_ in out] == [(1, "확정"), (1, "휴면"), (1, "휴면"), (1, "확정")]
 
 
 def test_provisional_shows_band_but_does_not_lock():
-    top, width, count = 1.0, 0.5, 6
-    out = ot.assign(_tl([0.85, 0.25], sure=False), top, width, count, z_up=1.0)
+    b = ot.Bands.even(1.0, 0.5, 6)
+    out = ot.assign(_tl([0.85, 0.25], sure=False), b, z_up=1.0)
     assert [(k, s) for k, s, *_ in out] == [(0, "잠정"), (1, "잠정")]
 
 

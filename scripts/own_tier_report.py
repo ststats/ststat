@@ -95,7 +95,7 @@ def timelines_for(fits, group, band, z_up, up_months):
     out = {}
     for i in np.flatnonzero(seen & (group >= 0)):
         tl = [(x["theta"][i], x["se"][i], bool(x["active"][i]), bool(x["sure"][i])) for x in fits]
-        out[int(i)] = ot.assign(tl, *band[group[i]], z_up=z_up, up_months=up_months)
+        out[int(i)] = ot.assign(tl, band[group[i]], z_up=z_up, up_months=up_months)
     return out
 
 
@@ -111,9 +111,8 @@ def validate(data, fits, group, band, timelines, ladders, index, ids, last_day):
         for i, tl in timelines.items():
             k, status, k_now, _ = tl[mi]
             if k is not None and status != "휴면":
-                top, width, _ = band[group[i]]
-                reached[i] = top - (k + 0.5) * width
-                now[i] = top - (k_now + 0.5) * width
+                b = band[group[i]]
+                reached[i], now[i] = ot.band_mid(k, b), ot.band_mid(k_now, b)
         off = official_index(ids, x["as_of"], ladders, index)
         mask = (data["day"] > start) & (data["day"] <= start + HOLDOUT_DAYS)
         w, lo = data["wi"][mask], data["li"][mask]
@@ -197,8 +196,7 @@ def explain(data, ids, group, players, last, ladders, index, last_day, band, kna
         def above(o, me=me):
             return (off[o] >= 0) & (off[o] < me)
 
-        top, width, _ = band[g]
-        low, high = ot.band_bounds(p["_k"], top, width)
+        low, high = ot.band_bounds(p["_k"], band[g])
         theta, se, form = last["theta"][i], last["se"][i], last["form"][i]
         sm, ab = record(year, same), record(year, above)
         higher = p["_k"] < exp
@@ -241,7 +239,7 @@ def build(store, index, ladders, months_back):
     first = 0 if gap is None or gap[0] >= 0 else 1
     label = {first: "1그룹", 1 - first: "2그룹"}
     align(fits, group)
-    band = {g: ot.bands(last["theta"][group == g], last["se"][group == g], last["active"][group == g]) for g in (0, 1)}
+    band = {g: ot.bands(last["theta"][group == g], last["se"][group == g], last["sure"][group == g]) for g in (0, 1)}
 
     # 1그룹은 글자(S·A·B…), 2그룹은 숫자(0·1·2…)
     def kname(g, k):
@@ -279,7 +277,7 @@ def build(store, index, ladders, months_back):
     both = (gw >= 0) & (gl >= 0)
     groups_out = []
     for g in sorted((0, 1), key=lambda g: label[g]):
-        top, width, count = band[g]
+        count = band[g].count
         mine = [p for p in players if p["_g"] == g]
         cross = []
         for t in TIER_ORDER:
@@ -288,8 +286,9 @@ def build(store, index, ladders, months_back):
             if sum(cnt):
                 cross.append({"official": t, "counts": cnt})
         groups_out.append({
-            "label": label[g], "names": [kname(g, k) for k in range(count)], "width": pts(width),
-            "bounds": [pts(ot.band_bounds(k, top, width)[0]) + SCORE_BASE for k in range(count)],
+            "label": label[g], "names": [kname(g, k) for k in range(count)],
+            "widths": [pts(band[g].uppers[k] - band[g].lowers[k]) for k in range(count)],
+            "bounds": [pts(band[g].lowers[k]) + SCORE_BASE for k in range(count)],
             "active": len(mine), "cross": cross,
         })  # fmt: skip
     report = {
@@ -339,7 +338,10 @@ def markdown(r):
         "",
     ]
     for g in r["groups"]:
-        lines += [f"## {g['label']} (활동 {g['active']}명 · 칸 {len(g['names'])}개 · 한 칸 {g['width']}점)", ""]
+        lines += [
+            f"## {g['label']} (활동 {g['active']}명 · 칸 {len(g['names'])}개 · 칸 폭 {min(g['widths'])}~{max(g['widths'])}점)",
+            "",
+        ]
         for name in g["names"]:
             here = [p for p in r["players"] if p["group"] == g["label"] and p["tier"] == name]
             lines.append(f"- **{name}**: " + ", ".join(
