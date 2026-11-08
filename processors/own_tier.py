@@ -47,8 +47,11 @@ def logit(p):
     return math.log(p / (1 - p))
 
 
-def prepare(rows, cats, players):
-    """경기 행 [id, 날짜, 승자, 패자, 맵, 형식]을 넘파이 배열로. 노드 = 선수 id."""
+def prepare(rows, cats, players, alias=None):
+    """경기 행 [id, 날짜, 승자, 패자, 맵, 형식]을 넘파이 배열로. 노드 = 선수 id.
+    alias {연결 계정 id: 메인 id}: 종족 변경 등으로 생긴 다른 계정의 경기를 메인 계정 경기로 합친다
+    (같은 사람끼리 붙은 경기는 뺀다)."""
+    alias = alias or {}
     cat_w = [CAT_WEIGHT.get(c, DEFAULT_CAT_WEIGHT) for c in cats]
     ids, index = [], {}
 
@@ -65,9 +68,12 @@ def prepare(rows, cats, players):
             d = dt.date.fromisoformat(str(r[1])[:10]).toordinal()
         except (TypeError, ValueError):
             continue
+        win, lose = alias.get(str(r[2]), str(r[2])), alias.get(str(r[3]), str(r[3]))
+        if win == lose:
+            continue
         day.append(d)
-        wi.append(node(r[2]))
-        li.append(node(r[3]))
+        wi.append(node(win))
+        li.append(node(lose))
         c = r[5]
         cw.append(cat_w[c] if isinstance(c, int) and 0 <= c < len(cat_w) else DEFAULT_CAT_WEIGHT)
     race = [race_code((players.get(pid) or ["", ""])[1]) for pid in ids]
@@ -280,7 +286,9 @@ def band_mid(k, b):
 
 def assign(timeline, b, z_up=Z_UP, up_months=UP_MONTHS):
     """월별 [(θ, 표준오차, 활동 여부, 확정 여부)]에 '도달 티어' 규칙을 적용한다.
-    반환: 월별 (도달 칸, 상태 '확정'·'잠정'·'휴면', 지금 실력 칸, 하락세 여부). 잠정은 칸을 보여 주되 굳히지 않는다."""
+    반환: 월별 (도달 칸, 상태 '확정'·'잠정'·'휴면', 지금 실력 칸, 하락세 여부).
+    한 번도 확정된 적 없는 잠정 선수는 칸을 매기지 않는다(None). 경기가 적으면 점수가 가운데로 끌려오고
+    오차까지 빼면 실력보다 한참 낮은 칸에 놓이기 때문이다. 이런 선수는 보고서가 범위로만 보인다."""
     tier, up, low, out = None, 0, 0, []
     for theta, se, active, sure, *_ in timeline:
         now = band_of(theta, b)
@@ -290,9 +298,9 @@ def assign(timeline, b, z_up=Z_UP, up_months=UP_MONTHS):
             up = low = 0
             continue
         if tier is None:
-            out.append((proven, "확정" if sure else "잠정", now, False))
             if sure:
                 tier = proven
+            out.append((tier, "확정" if sure else "잠정", now, False))
             continue
         up = up + 1 if proven < tier else 0
         if up >= up_months:

@@ -103,10 +103,17 @@ def test_dormant_freezes_tier():
     assert [(k, s) for k, s, *_ in out] == [(1, "확정"), (1, "휴면"), (1, "휴면"), (1, "확정")]
 
 
-def test_provisional_shows_band_but_does_not_lock():
+def test_provisional_is_not_placed_until_sure():
     b = ot.Bands.even(1.0, 0.5, 6)
-    out = ot.assign(_tl([0.85, 0.25], sure=False), b, z_up=1.0)
-    assert [(k, s) for k, s, *_ in out] == [(0, "잠정"), (1, "잠정")]
+    out = ot.assign(_tl([0.85], sure=False) + _tl([0.85]), b, z_up=1.0)
+    assert [(k, s) for k, s, *_ in out] == [(None, "잠정"), (0, "확정")]
+
+
+def test_linked_accounts_are_merged_into_main():
+    rows = [[1, "2026-01-01", 10, 20, None, 0], [2, "2026-01-02", 11, 20, None, 0], [3, "2026-01-03", 10, 11, None, 0]]
+    data = ot.prepare(rows, ["solo_event"], {}, alias={"11": "10"})
+    assert data["ids"] == ["10", "20"]
+    assert len(data["day"]) == 2  # 같은 사람끼리 붙은 경기는 뺀다
 
 
 def test_report_runs_end_to_end(tmp_path, monkeypatch):
@@ -147,6 +154,7 @@ def test_report_runs_end_to_end(tmp_path, monkeypatch):
     import repositories.derived_stats as ds
 
     monkeypatch.setattr(ds, "load_source_data", lambda: source)
+    monkeypatch.setattr(rep, "load_aliases", dict)
     monkeypatch.setattr(sys, "argv", ["own_tier_report.py", "--months", "6", "--out", str(tmp_path)])
     rep.main()
     import json

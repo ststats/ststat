@@ -63,6 +63,19 @@ def load():
     return store, index, load_ladders(source["tier_members"], index)
 
 
+def load_aliases() -> dict[str, str]:
+    """선수 관리의 연결 계정 {연결 ELO ID: 그 선수의 메인 ELO ID}."""
+    from repositories.derived_stats import _paged
+
+    main = {r["id"]: r.get("elo_id") for r in _paged("tier_members", "id,elo_id", "id")}
+    out = {}
+    for r in _paged("tier_member_elo_links", "elo_id,tier_member_id", "elo_id"):
+        target = main.get(r.get("tier_member_id"))
+        if target is not None and r.get("elo_id") is not None and str(r["elo_id"]) != str(target):
+            out[str(r["elo_id"])] = str(target)
+    return out
+
+
 def fit_months(data, months):
     fits = []
     for as_of in months:
@@ -225,12 +238,13 @@ def explain(data, ids, group, players, last, ladders, index, last_day, band, kna
     return out
 
 
-def build(store, index, ladders, months_back):
-    data = ot.prepare(store["rows"], store["cats"], store["players"])
+def build(store, index, ladders, months_back, alias=None):
+    data = ot.prepare(store["rows"], store["cats"], store["players"], alias)
     ids = data["ids"]
     last_day = dt.date.fromordinal(int(data["day"].max()))
     months = ot.month_ends(last_day, months_back)
     print(f"경기 {len(data['day']):,} · 선수 {len(ids):,} · {months[0]}~{months[-1]} {len(months)}달", flush=True)
+    print(f"연결 계정 {len(alias or {}):,}개를 메인 계정으로 합침", flush=True)
     fits = fit_months(data, months)
     # 무리 나누기(누가 누구와 붙는지). 높은 쪽(무리 사이 경기로 잰 높이)을 1그룹으로 부른다
     group = ot.groups(data)
@@ -264,10 +278,13 @@ def build(store, index, ladders, months_back):
         pid = ids[i]
         info = index.get(pid) or {}
         g = int(group[i])
+        theta_i, se_i = last["theta"][i], last["se"][i]
+        # 칸을 매기지 않은 잠정 선수는 점수 ± 오차가 걸치는 칸 범위만 보인다
+        span = [kname(g, ot.band_of(theta_i + se_i, band[g])), kname(g, ot.band_of(theta_i - se_i, band[g]))]
         players.append({
             "elo_id": pid, "name": info.get("n") or (store["players"].get(pid) or [""])[0],
             "roster": pid in index, "group": label[g], "tier": kname(g, k) if k is not None else "",
-            "now": kname(g, k_now), "status": status, "declining": bool(declining),
+            "now": kname(g, k_now), "status": status, "declining": bool(declining), "range": span,
             "score": pts(last["theta"][i]) + SCORE_BASE, "se": pts(last["se"][i]),
             "games": int(last["f"]["games"][i]), "official": info.get("t") or "", "team": info.get("tm") or "",
             "_i": i, "_g": g, "_k": k if k is not None else 99,
@@ -347,6 +364,11 @@ def markdown(r):
             lines.append(f"- **{name}**: " + ", ".join(
                 f"{p['name']}({p['official'] or '?'}){'↓' if p['declining'] else ''}" for p in here if p["roster"]
             ))  # fmt: skip
+        unplaced = [p for p in r["players"] if p["group"] == g["label"] and not p["tier"] and p["roster"]]
+        if unplaced:
+            lines.append("- **미정(경기 적음)**: " + ", ".join(
+                f"{p['name']}({p['official'] or '?'}, {p['range'][0]}~{p['range'][1]}칸, {p['games']}판)" for p in unplaced
+            ))  # fmt: skip
         lines.append("")
     v = r["validation"]["total"]
     if v.get("n"):
@@ -366,7 +388,7 @@ def main():
     ap.add_argument("--out", default="out/own_tier")
     args = ap.parse_args()
     store, index, ladders = load()
-    report = build(store, index, ladders, args.months)
+    report = build(store, index, ladders, args.months, load_aliases())
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     text = json.dumps(report, ensure_ascii=False)
