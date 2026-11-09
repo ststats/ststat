@@ -44,7 +44,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     outputs:
-      ok: ${{ steps.sync.outcome == 'success' }}
+      # 멈춰 둔 동안(skipped)은 새 경기가 없을 뿐 수집 실패가 아니라 시너지 지난달 확정을 미루지 않는다
+      ok: ${{ steps.sync.outcome == 'success' || steps.sync.outcome == 'skipped' }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -54,9 +55,11 @@ jobs:
       - run: pip install -r requirements.txt
       # EloBoard가 2026-11 개편 뒤 자동 수집(/api/)을 막아(robots.txt·nginx 403) 실패해도 뒤 작업은 기존 경기로 계속한다.
       # 경기를 다 받은 뒤에야 쓰므로(sync_eloboard) 실패해도 반쯤 쓴 경기는 없다. 성공 여부는 outputs.ok로 넘긴다
+      # 2026-11-09부터 멈춤. 다시 돌리려면 저장소 변수 ELOBOARD_SYNC=on
       - name: Sync EloBoard matches
         id: sync
         continue-on-error: true
+        if: ${{ vars.ELOBOARD_SYNC == 'on' }}
         env:
           ELOBOARD_DELAY: "2.0"
           ELOBOARD_OVERLAP_DAYS: "3"
