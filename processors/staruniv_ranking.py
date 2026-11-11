@@ -256,9 +256,31 @@ def tier_at(pid, day, ladders, players):
     return tier
 
 
-def build_pairs(rows, cats, today, players, ladders, t_pos, category_weights=None):
+# 같은 날 같은 두 선수의 반복 판(스폰에서 흔하다)은 서로 독립이 아니라 덜 센다: (몇 번째부터, 배율)
+REPEAT_STEPS = ((5, 0.5), (10, 0.25))
+
+
+def repeat_multipliers(rows, steps=REPEAT_STEPS):
+    """{경기id: 배율}. 같은 날 같은 두 선수(순서 무관) 경기를 경기id 순으로 세어 steps대로 줄인다(1이면 뺀다)."""
+    count = {}
+    out = {}
+    for r in sorted((r for r in rows if len(r) >= 6), key=lambda r: (str(r[1])[:10], r[0])):
+        key = (str(r[1])[:10], min(str(r[2]), str(r[3])), max(str(r[2]), str(r[3])))
+        k = count[key] = count.get(key, 0) + 1
+        mult = 1.0
+        for start, factor in steps:
+            if k >= start:
+                mult = factor
+        if mult != 1.0:
+            out[r[0]] = mult
+    return out
+
+
+def build_pairs(rows, cats, today, players, ladders, t_pos, category_weights=None, row_weights=None):
     """경기 행을 (승자, 패자) 쌍별 가중치 합으로 접는다.
     두 단이 같은 쌍 목록을 써야 해서 ww(폼, 짧은 창)와 ww_tier(티어 간격, 긴 창)를 한 번에 만든다.
+
+    row_weights {경기id: 배율}(repeat_multipliers)를 주면 형식 가중치에 곱한다.
 
     반환: (승자 인덱스, 패자 인덱스, 폼 가중치, 티어 가중치,
            경기 당시 승자/패자 티어, 선수id 목록,
@@ -292,6 +314,8 @@ def build_pairs(rows, cats, today, players, ladders, t_pos, category_weights=Non
         if age < 0:
             continue  # 과거 시점 추정과 홀드아웃에서 미래 경기 유입을 차단한다.
         cw = cat_w[cat] if isinstance(cat, int) and 0 <= cat < len(cat_w) else fallback_weight
+        if row_weights:
+            cw *= row_weights.get(r[0], 1.0)
         w = cw * 0.5 ** (age / HALF_LIFE_DAYS)
         wt = cw * 0.5 ** (age / HALF_LIFE_TIER_DAYS)
         if w <= 0 and wt <= 0:
