@@ -34,6 +34,8 @@ SIGMA_BASE = 2.0  # 바탕 b의 아주 약한 prior(수치 안정·저표본 묶
 SIGMA_FORM = 0.675  # 폼 δ prior(티어랭킹과 같다)
 LAMBDA_RACE = 1e-6
 
+# 검증 상한(verify_cap): 최근 2년 상대 상위 10% 수준 + 50점(로짓 0.29)
+CAP_DAYS, CAP_MIN_GAMES, CAP_QUANTILE, CAP_MARGIN = 730, 30, 0.9, 50 / (400 / math.log(10))
 DORMANT_DAYS = 90
 MIN_GAMES = 20  # 최근 1년 이만큼 두어야 '확정'(아니면 잠정)
 MAX_SE = 0.45  # 표준오차가 이보다 크면 잠정
@@ -115,6 +117,8 @@ def fold(data, as_of: dt.date):
     w_base = np.bincount(inv, weights=cw * 0.5 ** (age / BASE_HALF_LIFE))
     w_form = np.bincount(inv, weights=cw * 0.5 ** (age / FORM_HALF_LIFE))
     pwi, pli = uniq // n, uniq % n
+    n_all = np.bincount(inv).astype(float)
+    n_cap = np.bincount(inv, weights=(age <= CAP_DAYS).astype(float))
     recent = age <= 365
     games = np.bincount(wi[recent], minlength=n) + np.bincount(li[recent], minlength=n)
     total = np.bincount(wi, minlength=n) + np.bincount(li, minlength=n)
@@ -123,7 +127,7 @@ def fold(data, as_of: dt.date):
     np.maximum.at(last, li, t - age)
     ridx, rsign = _race_index(data["race"], pwi, pli)
     return {"wi": pwi, "li": pli, "w_base": w_base, "w_form": w_form, "games": games, "total": total, "last": last,
-            "ridx": ridx, "rsign": rsign, "n": n, "as_of": t}  # fmt: skip
+            "ridx": ridx, "rsign": rsign, "n": n, "as_of": t, "n_all": n_all, "n_cap": n_cap}  # fmt: skip
 
 
 def _fit(wi, li, w, n, prior, offset, ridx=None, rsign=None):
@@ -230,6 +234,63 @@ def group_gap(data, theta, group):
             break
     days = np.sort(data["day"][cross])
     return gap, 1 / math.sqrt(max(hess, 1e-9)), int(cross.sum()), dt.date.fromordinal(int(days[len(days) // 2]))
+
+
+def verify_cap(folded, theta):
+    """검증 상한(EloBoard 새 점수 방식 3-7과 같은 생각): 붙어 본 적 없는 높이는 근거가 없으니,
+    최근 CAP_DAYS일 상대들 실력의 상위 CAP_QUANTILE 수준 + CAP_MARGIN까지만 인정한다.
+    그 기간 CAP_MIN_GAMES판이 안 되면 전체 기간 상대로 잰다. 상대가 없으면 상한 없음(inf)."""
+    f = folded
+    n = f["n"]
+    cap = np.full(n, np.inf)
+    for i in range(n):
+        side_w, side_l = f["wi"] == i, f["li"] == i
+        opp = np.concatenate([f["li"][side_w], f["wi"][side_l]])
+        counts = np.concatenate([f["n_cap"][side_w], f["n_cap"][side_l]])
+        if counts.sum() < CAP_MIN_GAMES:
+            counts = np.concatenate([f["n_all"][side_w], f["n_all"][side_l]])
+        keep = counts > 0
+        if not keep.any():
+            continue
+        vals, wts = theta[opp[keep]], counts[keep]
+        order = np.argsort(vals)
+        cum = np.cumsum(wts[order]) / wts.sum()
+        cap[i] = vals[order][min(len(vals) - 1, int(np.searchsorted(cum, CAP_QUANTILE)))] + CAP_MARGIN
+    return cap
+
+
+def cohort_gaps(data, theta, group, as_of_ord, days=730):
+    """데뷔 연도(첫 경기 해)별로, 같은 그룹 안 다른 연도 선수와 최근 days일 경기에서 이 연도 선수들이
+    점수보다 얼마나 더 이기는지(로짓, +면 점수가 실력보다 낮음). EloBoard는 신입끼리 주로 붙어 신입 연도가
+    높게 뜬다고 했다. 반환: [(그룹, 연도, 차이, 표준오차, 경기 수)]."""
+    n = len(data["ids"])
+    first = np.full(n, np.iinfo(np.int64).max)
+    np.minimum.at(first, data["wi"], data["day"])
+    np.minimum.at(first, data["li"], data["day"])
+    year = np.array([dt.date.fromordinal(int(d)).year if d < np.iinfo(np.int64).max else 0 for d in first])
+    year = np.where(year < 2018, 2017, year)  # 2018년 전 데뷔는 한 묶음
+    recent = (data["day"] > as_of_ord - days) & (data["day"] <= as_of_ord)
+    out = []
+    for g in (0, 1):
+        for y in sorted(set(year[group == g])):
+            w, lo = data["wi"][recent], data["li"][recent]
+            same_g = (group[w] == g) & (group[lo] == g)
+            inside_w, inside_l = year[w] == y, year[lo] == y
+            cross = same_g & (inside_w != inside_l)
+            if cross.sum() < 50:
+                continue
+            d0 = theta[w[cross]] - theta[lo[cross]]
+            sign = np.where(inside_w[cross], 1.0, -1.0)
+            gap, hess = 0.0, 1.0
+            for _ in range(50):
+                p = 1 / (1 + np.exp(-np.clip(d0 + sign * gap, -60, 60)))
+                grad, hess = float(np.sum(sign * (1 - p))), float(np.sum(p * (1 - p)))
+                step = grad / max(hess, 1e-9)
+                gap += step
+                if abs(step) < 1e-9:
+                    break
+            out.append((g, int(y), gap, 1 / math.sqrt(max(hess, 1e-9)), int(cross.sum())))
+    return out
 
 
 def active_mask(folded):

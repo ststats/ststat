@@ -58,6 +58,41 @@ def test_groups_split_rarely_meeting_crowds_and_gap_sign():
     assert abs(abs(gap) - 2.0) < 4 * se + 0.5
 
 
+def test_verify_cap_limits_score_to_opponents_level():
+    """아래 상대만 이긴 선수는 상대 상위 10% 수준 + 50점까지만 인정한다."""
+    rows = [[k, "2026-06-01", 1, 2 + k % 5, None, 0] for k in range(60)]  # 1번이 2~6번만 이긴다
+    data = ot.prepare(rows, ["solo_event"], {})
+    f = ot.fold(data, dt.date(2026, 11, 1))
+    theta = np.array([3.0, 0.0, 0.1, 0.2, 0.3, 0.4])  # ids 순서: 1, 2, 3, ...
+    cap = ot.verify_cap(f, theta)
+    pos = {pid: k for k, pid in enumerate(data["ids"])}
+    assert abs(cap[pos["1"]] - (0.4 + ot.CAP_MARGIN)) < 1e-9
+    assert np.all(
+        np.minimum(theta, cap)[[pos[str(i)] for i in range(2, 7)]] == theta[[pos[str(i)] for i in range(2, 7)]]
+    )
+
+
+def test_cohort_gap_finds_an_overrated_debut_year():
+    """같은 그룹 안에서 2026년 데뷔 선수들이 점수보다 덜 이기면 차이가 음수로 나온다."""
+    rng = random.Random(9)
+    old, new = list(range(1, 21)), list(range(21, 41))
+    rows = [[k, "2024-01-01", a, b, None, 0] for k, (a, b) in enumerate(zip(old, old[1:] + old[:1]))]
+    rows += [[100 + k, "2026-02-01", n, n + 1 if n < 40 else 21, None, 0] for k, n in enumerate(new)]
+    for k in range(400):  # 옛 선수가 신입을 70% 이긴다
+        a, b = rng.choice(old), rng.choice(new)
+        win, lose = (a, b) if rng.random() < 0.7 else (b, a)
+        rows.append([1000 + k, "2026-06-01", win, lose, None, 0])
+    data = ot.prepare(rows, ["solo_event"], {})
+    theta = np.zeros(len(data["ids"]))  # 점수는 모두 같다고 두면
+    gaps = {
+        (g, y): gap
+        for g, y, gap, _, _ in ot.cohort_gaps(
+            data, theta, np.zeros(len(theta), dtype=int), dt.date(2026, 11, 1).toordinal()
+        )
+    }
+    assert gaps[(0, 2026)] < -0.5  # 신입 연도가 점수만큼 못 이긴다(점수가 높게 떠 있다)
+
+
 def test_bands_split_by_win_rate_and_widen_where_error_is_large():
     theta = np.linspace(-2, 2, 200)
     sure = np.ones(200, dtype=bool)
@@ -164,5 +199,6 @@ def test_report_runs_end_to_end(tmp_path, monkeypatch):
     assert report["groups"][0]["names"][:2] == ["갓", "킹"]  # 1그룹은 카드 이름
     assert report["groups"][1]["names"][:3] == ["0", "1", "2"]  # 2그룹은 숫자
     assert len(report["variants"]) == 4 and report["validation"]["rows"]
+    assert {"before", "after", "players"} <= report["cap"].keys() and isinstance(report["cohorts"], list)
     assert "## 1그룹" in (tmp_path / "report.md").read_text(encoding="utf-8")
     assert (tmp_path / "table.csv").read_text(encoding="utf-8-sig").startswith("elo_id,name,group,tier,now")

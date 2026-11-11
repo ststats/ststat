@@ -253,7 +253,20 @@ def build(store, index, ladders, months_back, alias=None):
     first = 0 if gap is None or gap[0] >= 0 else 1
     label = {first: "1그룹", 1 - first: "2그룹"}
     align(fits, group)
-    band = {g: ot.bands(last["theta"][group == g], last["se"][group == g], last["sure"][group == g]) for g in (0, 1)}
+
+    def make_band():
+        return {
+            g: ot.bands(last["theta"][group == g], last["se"][group == g], last["sure"][group == g]) for g in (0, 1)
+        }
+
+    # 검증 상한 전 값으로 한 번 매겨 견준다(EloBoard 새 점수 방식 3-7)
+    band_raw = make_band()
+    tls_raw = timelines_for(fits, group, band_raw, ot.Z_UP, ot.UP_MONTHS)
+    _, val_raw = validate(data, fits, group, band_raw, tls_raw, ladders, index, ids, last_day)
+    for x in fits:
+        x["theta_raw"] = x["theta"]
+        x["theta"] = np.minimum(x["theta"], ot.verify_cap(x["f"], x["theta"]))
+    band = make_band()
 
     # 1그룹은 갓·킹·잭·조커·스페이드, 2그룹은 숫자(0·1·2…)
     def kname(g, k):
@@ -289,6 +302,7 @@ def build(store, index, ladders, months_back, alias=None):
             "roster": pid in index, "group": label[g], "tier": kname(g, k) if k is not None else "",
             "now": kname(g, k_now), "status": status, "declining": bool(declining), "range": span,
             "score": pts(last["theta"][i]) + SCORE_BASE, "se": pts(last["se"][i]),
+            "capped": bool(last["theta_raw"][i] - last["theta"][i] > 1e-9),
             "games": int(last["f"]["games"][i]), "official": info.get("t") or "", "team": info.get("tm") or "",
             "_i": i, "_g": g, "_k": k if k is not None else 99,
         })  # fmt: skip
@@ -311,6 +325,18 @@ def build(store, index, ladders, months_back, alias=None):
             "bounds": [pts(band[g].lowers[k]) + SCORE_BASE for k in range(count)],
             "active": len(mine), "cross": cross,
         })  # fmt: skip
+    capped = []
+    for p in players:
+        i = p["_i"]
+        over = last["theta_raw"][i] - last["theta"][i]
+        if p["roster"] and over > 1e-9:
+            capped.append({"name": p["name"], "group": p["group"], "official": p["official"], "tier": p["tier"],
+                           "raw": pts(last["theta_raw"][i]) + SCORE_BASE, "score": p["score"], "games": p["games"]})  # fmt: skip
+    capped.sort(key=lambda c: c["score"] - c["raw"])
+    cohorts = [
+        {"group": label[g], "year": y, "gap": pts(gap), "se": pts(se_), "games": n_}
+        for g, y, gap, se_, n_ in ot.cohort_gaps(data, last["theta"], group, last_day.toordinal())
+    ]
     report = {
         "as_of": last_day.isoformat(),
         "matches": len(data["day"]),
@@ -339,6 +365,8 @@ def build(store, index, ladders, months_back, alias=None):
         "groups": groups_out,
         "variants": [{k: v for k, v in x.items() if k != "_tls"} for x in variants],
         "validation": {"rows": val_rows, "total": val_tot},
+        "cap": {"before": val_raw, "after": val_tot, "players": capped},
+        "cohorts": cohorts,
         "stability": stability(fits, timelines),
         "explain": explain(data, ids, group, players, last, ladders, index, last_day, band, kname),
     }
