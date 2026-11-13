@@ -38,9 +38,10 @@ MIN_POONGGO_COVERAGE = 1.0
 MAX_CONFIRM_MONTHS_PER_RUN = 12
 
 
-# 월 누적 출처는 트래키파이, MONTHLY_SOURCE=poonggo면 풍고(뷰어십 없음). poonggo_* 이름은 이 '월 누적 출처'를 뜻한다.
+# 월 누적 출처는 풍고(뷰어십 없음). 트래키파이가 403으로 막혀(2026-11-13) 기본을 풍고로 돌렸고,
+# MONTHLY_SOURCE=trackify면 트래키파이. poonggo_* 이름은 이 '월 누적 출처'를 뜻한다.
 def _trackify_enabled() -> bool:
-    return os.getenv("MONTHLY_SOURCE", "").strip().lower() != "poonggo"
+    return os.getenv("MONTHLY_SOURCE", "").strip().lower() == "trackify"
 
 
 def _source_name() -> str:

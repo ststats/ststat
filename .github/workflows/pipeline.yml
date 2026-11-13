@@ -86,7 +86,7 @@ jobs:
     timeout-minutes: 45
     env:
       ELOBOARD_OK: ${{ needs.eloboard.result == 'success' && needs.eloboard.outputs.ok == 'true' }}
-      # 기본 트래키파이, 문제가 생기면 저장소 변수 MONTHLY_SOURCE=poonggo(예비)
+      # 기본 풍고, 트래키파이로 받으려면 저장소 변수 MONTHLY_SOURCE=trackify
       MONTHLY_SOURCE: ${{ vars.MONTHLY_SOURCE }}
     steps:
       - uses: actions/checkout@v5

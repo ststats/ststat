@@ -67,7 +67,7 @@ def test_malformed_trackify_response_is_an_error_not_zero(monkeypatch, payload):
         trackify.fetch_monthly(2026, 10, ["a", "b"])
 
 
-def test_daily_job_uses_trackify_unless_switched_to_poonggo(monkeypatch):
+def test_daily_job_uses_poonggo_unless_switched_to_trackify(monkeypatch):
     from collectors import poonggo
     from jobs import sync_synergy_daily as job
 
@@ -78,10 +78,10 @@ def test_daily_job_uses_trackify_unless_switched_to_poonggo(monkeypatch):
 
     monkeypatch.delenv("MONTHLY_SOURCE", raising=False)
     job.fetch_monthly(2026, 10, ["a"])
-    monkeypatch.setenv("MONTHLY_SOURCE", "poonggo")
+    monkeypatch.setenv("MONTHLY_SOURCE", "trackify")
     job.fetch_monthly(2026, 10, ["a"])
 
-    assert used == ["trackify", "poonggo"]
+    assert used == ["poonggo", "trackify"]
 
 
 def test_daily_rows_carry_viewership_and_poonggo_leaves_it_empty():
@@ -136,7 +136,7 @@ MISSING = {
 def test_missing_broadcast_is_added_to_each_month_for_its_part(monkeypatch):
     from jobs import sync_synergy_daily as job
 
-    monkeypatch.delenv("MONTHLY_SOURCE", raising=False)
+    monkeypatch.setenv("MONTHLY_SOURCE", "trackify")
     monkeypatch.setattr(job, "load_missing_broadcasts", lambda: [MISSING])
     monkeypatch.setattr(
         trackify,
@@ -156,7 +156,7 @@ def test_poonggo_fallback_does_not_add_missing_broadcasts(monkeypatch):
     from collectors import poonggo
     from jobs import sync_synergy_daily as job
 
-    monkeypatch.setenv("MONTHLY_SOURCE", "poonggo")
+    monkeypatch.delenv("MONTHLY_SOURCE", raising=False)  # 기본이 풍고
     monkeypatch.setattr(job, "load_missing_broadcasts", lambda: [MISSING])
     monkeypatch.setattr(poonggo, "fetch_monthly", lambda y, m, ids: {"long": MonthlyLiveStats(5, 100, 7)})
     assert job.fetch_monthly(2026, 10, ["long"])["long"] == MonthlyLiveStats(5, 100, 7)
@@ -166,7 +166,7 @@ def test_missing_broadcast_is_added_once_to_already_published_days(monkeypatch):
     from datetime import date
     from jobs import sync_synergy_daily as job
 
-    monkeypatch.delenv("MONTHLY_SOURCE", raising=False)
+    monkeypatch.setenv("MONTHLY_SOURCE", "trackify")
     store = {
         d: [
             {"soop_id": "long", "broadcast_seconds": 100, "viewership_seconds": 1000},

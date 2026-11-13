@@ -96,8 +96,8 @@ synergy_daily_stats:
   executor: external_cron_to_github_actions
   cadence: "after sync_eloboard, in parallel with calculate_eloboard_stats (normally every 4 hours)"
   external_source:
-    - trackify_ranking_summary   # 기본: 별풍선·방송시간·누적시청자·뷰어십, 아이디 100개씩
-    - poonggo_monthly_api        # 예비(MONTHLY_SOURCE=poonggo): 뷰어십 없음
+    - poonggo_monthly_api        # 기본: 별풍선·방송시간·누적시청자(뷰어십 없음)
+    - trackify_ranking_summary   # MONTHLY_SOURCE=trackify: 뷰어십까지, 아이디 100개씩
   source_tables:
     - tier_members
     - elo_matches
