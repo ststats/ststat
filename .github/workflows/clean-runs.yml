@@ -1,0 +1,32 @@
+name: Clean runs
+
+# 커밋을 하나로 합쳐 두듯 실행 기록도 워크플로마다 가장 최근 실행 하나만 남기고 나머지는 지운다.
+# (마지막 실행이 실패면 원인을 볼 수 있게 그대로 남고, 보고서·백업 같은 결과 파일도 최신 것은 남는다)
+
+on:
+  workflow_run:
+    workflows: ["Pipeline", "Test", "Ranking backtest", "Rebuild EloBoard models", "Own tier report"]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  actions: write
+
+concurrency:
+  group: clean-runs
+
+jobs:
+  clean:
+    runs-on: ubuntu-24.04
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          api="repos/${GITHUB_REPOSITORY}/actions/runs"
+          # 끝난 실행을 워크플로별 최신순으로 늘어놓고 워크플로마다 첫 줄(가장 최근)만 남긴다.
+          # 정리 실행은 지금 도는 이 실행이 최신이므로 끝난 것은 모두 지운다
+          # status=completed로 거르면 빠지는 실행이 있어(며칠째 안 지워졌다) 전체를 받아 여기서 거른다
+          gh api --paginate "${api}?per_page=100" \
+            --jq '.workflow_runs[] | select(.status == "completed") | [.path, .created_at, .id] | @tsv' |
+            sort -t $'\t' -k1,1 -k2,2r | awk -F '\t' '$1 ~ /clean-runs/ || seen[$1]++ {print $3}' |
+            while read -r id; do gh api -X DELETE "${api}/${id}" > /dev/null || echo "지우지 못함: ${id}"; done
